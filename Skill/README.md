@@ -173,6 +173,10 @@ node "%USERPROFILE%\.config\opencode\skills\cadviewer\scripts\cad.mjs" doctor
 # 环境自检
 node cad.mjs doctor
 
+# 【主流程】收到图纸：转 DXF + 起服务 + 返回可直接打开的链接与概要
+node cad.mjs open "<图纸目录>\示例图纸.dwg"
+# → {"ok":true,"url":"http://127.0.0.1:3717/?open=...","digest":{...},"next":[...]}
+
 # 一张图的全貌（实体/图层/图块/文字/天正/告警）
 node cad.mjs summary "<图纸目录>\示例图纸.dwg"
 

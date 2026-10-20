@@ -990,10 +990,64 @@ async function cmdServe(ctx, opts) {
   fail(`120s 内服务未就绪（${base}/api/health 不通）。请查看 start.bat 窗口的输出。`);
 }
 
+/* ───────────────────── open：SOP 一步到位（转 DXF → 链接 + 概要） ───────────────────── */
+
+/**
+ * 收到用户图纸后的标准动作：
+ *   ① 解析成 DXF（DWG 走 cadcraft，带缓存）
+ *   ② 确保本机服务在跑
+ *   ③ 返回一个**可以直接在浏览器打开**的地址（带 ?open=），以及摘要
+ *
+ * 给 agent 的约定：拿到 url 就用内置浏览器打开（和普通网页一致），
+ * 摘要可以直接用来跟用户讲图里有什么，再问下一步要做什么（导出 PDF 等）。
+ */
+async function cmdOpen(ctx, srcAbs, opts) {
+  const dxf = await ensureDxf(ctx, srcAbs);
+  const served = await cmdServe(ctx, opts);
+  if (!served || served.ok === false) return served;
+
+  const q = "?open=" + encodeURIComponent(dxf.dxfPath);
+  // 服务对外监听时优先给局域网地址（远端 agent 的浏览器才够得着）；否则就是本机地址
+  const primary = (served.lanUrls && served.lanUrls.length ? served.lanUrls[0] : served.url) + "/" + q;
+  const local = served.url + "/" + q;
+
+  const summary = await cmdSummary(ctx, srcAbs);
+  return {
+    ok: true,
+    url: primary,
+    localUrl: local,
+    host: served.host,
+    lanUrls: served.lanUrls || [],
+    dxf: {
+      path: dxf.dxfPath,
+      converted: !!dxf.converted,
+      fromCache: !!dxf.fromCache,
+    },
+    digest: {
+      entities: summary.entities.total,
+      byType: summary.entities.byType,
+      layers: { total: summary.layers.total, nonEmpty: summary.layers.nonEmpty },
+      blocks: summary.blocks,
+      extents: summary.extents,
+      contentBox: summary.contentBox ?? null,
+      header: summary.header,
+      text: summary.text,
+      tch: summary.tch,
+      warnings: summary.warnings,
+    },
+    next: [
+      "用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
+      "把 digest 里的数字讲给用户，并问接下来做什么",
+      "可提示：导出 PDF（A3 打印）、PNG（发人看）、DXF（给别人编辑）、JSON（存档）",
+    ],
+  };
+}
+
 const USAGE = {
   usage: "node Skill/cadviewer/scripts/cad.mjs <command> [file] [options]",
   commands: {
     doctor: "环境自检",
+    open: "open <file> [--port N]（SOP 一步到位：转 DXF → 起服务 → 返回可直接打开的链接 + 概要）",
     serve: "serve [--status] [--port N]（确保服务在跑并返回地址；--status 只查不启动）",
     summary: "summary <file>",
     stats: "stats <file>",
@@ -1050,6 +1104,9 @@ async function main() {
 
   let result;
   switch (command) {
+    case "open":
+      result = await cmdOpen(ctx, srcAbs, opts);
+      break;
     case "summary":
       result = await cmdSummary(ctx, srcAbs);
       break;

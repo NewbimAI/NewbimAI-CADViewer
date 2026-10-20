@@ -17,6 +17,59 @@ numbers you report are the *same numbers the UI shows*.
 
 **平台支持**：Windows 为完整功能且**已实测**（DWG 转换、四类导出、`serve` 起界面）。macOS / Linux 下可用的是 DXF 只读命令（`summary` `layers` `blocks` `text` `stats` `tch`）与 `export --to json|dxf`；DWG 转换与 `svg|pdf|png` 导出依赖 cadcraft（上游有 Windows 与 macOS 构建，本项目仅在 Windows 实测），`serve` 依赖 `start.bat`，在非 Windows 上不可用。
 
+## 标准流程（收到用户图纸后照这个走）
+
+用户发来图纸时，**不要只回一段统计文字**。一条命令起头，然后按 5 步走：
+
+```bash
+node Skill/cadviewer/scripts/cad.mjs open "<图纸.dwg|dxf>"
+```
+
+返回（节选）：
+
+```json
+{
+  "ok": true,
+  "url": "http://127.0.0.1:3717/?open=%3C...%3E",
+  "localUrl": "http://127.0.0.1:3717/?open=%3C...%3E",
+  "host": "127.0.0.1",
+  "lanUrls": [],
+  "dxf": { "path": "...converted.dxf", "converted": true, "fromCache": false },
+  "digest": {
+    "entities": 9459,
+    "layers": { "total": 142, "nonEmpty": 57 },
+    "blocks": { "named": 162, "unused": 28 },
+    "tch": { "level": "provenance" }
+  },
+  "next": ["用你的内置浏览器打开 url ...", "把 digest 讲给用户 ...", "..."]
+}
+```
+
+1. **解析成 DXF**：`open` 内部完成。DWG 走 cadcraft，产物缓存在
+   `server/cache/skill/<hash>/converted.dxf`，同一张图不会重复转换。
+2. **拿到链接**：用返回的 `url`（`localUrl` 是本机地址，`lanUrls` 是局域网地址）。
+3. **在内置浏览器打开**：界面与正常网页**完全一致** —— 缩放/平移、图层与图块面板
+   （双击行 = 聚焦，单击还原）、右上「导出」下拉。
+   等左下状态条 `data-dxf-status` 变成 `done` 再截图，别截中间态。
+4. **总结给用户**：用 `digest`（需要更多细节再跑 `summary` / `blocks` / `text`）：
+   多少实体、多少图层（其中几层非空）、多少图块（在用 / 未用）、图纸范围、
+   是不是天正图、有没有 `warnings`。**数字一律以 CLI 为准，不要从截图里数。**
+5. **问下一步**：给具体选项，别空问“还需要什么”：
+   - 打印 / 审图 → `export --to pdf`（A3 矢量）
+   - 发人看 / 嵌文档 → `export --to png`（白色 2×），或界面里导出当前视图
+   - 给别人用 CAD 编辑 → `export --to dxf`（原始 DXF）
+   - 存档 / 给程序读 → `export --to json`
+   - 看某层 / 某块 → 界面里双击该行聚焦
+
+**前提：先判断你的浏览器能不能访问那个地址。** 链接里的 `127.0.0.1` 指的是
+**浏览器所在那台机器**：
+
+| 你的位置 | 怎么做 |
+|---|---|
+| 和 CADViewer 同一台机器 | 直接用 `url` |
+| 同一局域网、能路由到宿主机 | 启动前 `set CADVIEWER_HOST=0.0.0.0`，用返回的 `url`（优先 `lanUrls`） |
+| 云端 / 沙箱，够不到那台机器 | 只能 `export --to png\|svg\|pdf` 把文件给用户看（这是网络边界，不是失败） |
+
 ## Setup (once)
 
 ```bash
