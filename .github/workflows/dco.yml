@@ -1,0 +1,20 @@
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  dco:
+    name: Check Signed-off-by
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 校验每个 commit 是否带 `Signed-off-by:`
+      # 约定：git commit -s 自动追加（见 CONTRIBUTING.md 第 2 节）
+      # 如果该 action 的 ref 不可用，换成 Marketplace 里任一 DCO 检查 action 即可。
+      - name: DCO check
+        uses: tim-actions/dco@master
