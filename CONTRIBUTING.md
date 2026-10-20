@@ -7,7 +7,14 @@
 本项目以 **AGPL-3.0-only** 开源，同时对无法遵守 AGPL 义务的企业提供**商业许可**。
 为了让同一份贡献能同时用于这两种授权，我们需要你对贡献授予**再许可权**——详见 [`CLA.md`](./CLA.md)。
 
-- **个人**：首次提 PR 时按 `CLA.md` 第 7 节表示同意即可（会有自动化提醒）。
+- **个人**：首次提 PR 时，CLA 检查会在该 PR 里留言；在里面直接回复下面这句话（原样复制）即可：
+
+  ```
+  I have read the CLA Document and I hereby sign the CLA
+  ```
+
+  签完若状态未变，回复 `recheck` 重新检查。签名会自动记录到
+  [`signatures/version1/cla.json`](./signatures/version1/cla.json)。
 - **公司 / 组织**：由授权代表发邮件到 **nbimgpt@163.com**（标题 `CLA - <公司名>`）。
 
 > ⚠️ 没有签署 CLA 的 PR 无法合并。这不是形式——没有它，我们就无法继续提供商业许可。
