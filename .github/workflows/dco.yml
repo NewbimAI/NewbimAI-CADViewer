@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+
 jobs:
   dco:
     name: Check Signed-off-by
@@ -13,8 +16,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 校验每个 commit 是否带 `Signed-off-by:`
-      # 约定：git commit -s 自动追加（见 CONTRIBUTING.md 第 2 节）
-      # 如果该 action 的 ref 不可用，换成 Marketplace 里任一 DCO 检查 action 即可。
+      # 自检，不依赖第三方 action：
+      # 逐个检查 PR 内的 commit message 是否含 `Signed-off-by: 名字 <邮箱>`。
+      # 约定见 CONTRIBUTING.md 第 2 节；`git commit -s` 会自动追加。
       - name: DCO check
-        uses: tim-actions/dco@master
+        shell: bash
+        run: |
+          set -uo pipefail
+          base="origin/${{ github.base_ref }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          echo "比较范围: $base..$head"
+
+          fail=0
+          total=0
+          for sha in $(git rev-list "$base..$head"); do
+            total=$((total + 1))
+            subject="$(git log -1 --format='%h %s' "$sha")"
+            if git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: [^<>]+ <[^<>@[:space:]]+@[^<>[:space:]]+>$'; then
+              echo "  OK   $subject"
+            else
+              echo "::error::缺少 Signed-off-by 行：$subject"
+              echo "  FAIL $subject"
+              fail=1
+            fi
+          done
+
+          echo "共检查 $total 个 commit"
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "修正方式（补签全部提交后强制推送）："
+            echo "  git rebase --signoff $base"
+            echo "  git push --force-with-lease"
+            exit 1
+          fi
