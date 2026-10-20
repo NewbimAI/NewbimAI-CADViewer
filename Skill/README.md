@@ -34,8 +34,11 @@ Skill/
 
 1. **`server/**` 模块**（只读复用）：`cadcraft.js`、`scanner.js`、`tch-detect.js`、`svg-pdf.js` 等。
    CLI 通过动态 `import()` 从项目根加载它们，**不会**把服务端代码复制进 Skill。
-2. **`bin/cadcraft/**` 转换器**（不在仓库内，需自行下载）：解压后应存在
-   `<项目根>/bin/cadcraft/**/cadcraft-cli.exe`，约 127MB，`.gitignore` 已排除。
+2. **`bin/cadcraft/**` 转换器**（不在仓库内，需自行下载）：
+   上游 **https://github.com/storytold/cadcraft/releases** → 下载
+   `cadcraft-<版本>-windows-x64-portable.zip`（约 57MB，解压后约 127MB），解压到
+   `<项目根>/bin/cadcraft/`，使 `<项目根>/bin/cadcraft/**/cadcraft-cli.exe` 存在。
+   实测 **0.7.0 / 0.8.0** 均兼容（开发时用 0.7.0）；`.gitignore` 已排除该目录。
 
 没有 cadcraft（项目根仍满足“存在 `server/scanner.js`”判据——**不要求** `bin/`）时：DXF 的统计/文字/图层/图块仍可用；DWG 转换与 SVG/PDF/PNG 导出不可用（`doctor` 会指出）。
 
@@ -45,7 +48,8 @@ Skill/
 
 **必须与整个 CADViewer 仓库一起使用。** 这个 Skill 只是薄壳，扫描器、DXF 解析、SVG/PDF 导出全部复用仓库里的 `server/**`（见上节）。单独拿走 `Skill/` 文件夹无法运行——连 `doctor` 都会失败，因为它找不到 `server/scanner.js`。
 
-- **`bin/cadcraft/`（Windows 便携版转换器）需单独下载**，仓库不含。缺它时 DWG 转换与 `svg|pdf|png` 导出不可用；DXF 的只读命令仍可用。
+- **`bin/cadcraft/`（Windows 便携版转换器）需单独下载**
+  （https://github.com/storytold/cadcraft/releases ），仓库不含。缺它时 DWG 转换与 `svg|pdf|png` 导出不可用；DXF 的只读命令仍可用。
 - **Windows**：完整功能——DWG 转换、`dxf|svg|pdf|png|json` 导出、`serve` 起界面。
 - **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `tch`，以及 `export --to json|dxf`。DWG 与图片/PDF 导出不支持（cadcraft 只提供 Windows 构建）。
 
@@ -77,6 +81,9 @@ OpenCode 会从 `<skills>/cadviewer/SKILL.md` 读取 Skill。默认 skill 根目
 ```text
 %USERPROFILE%\.config\opencode\skills\
 ```
+
+> **其他 agent**（Claude Code 的 `~/.claude/skills/`、Cursor 等各自的 skills 目录）同理：
+> 把 `Skill/cadviewer/` 软链接或复制到那个目录即可，目录名保持 `cadviewer`。
 
 目标结构必须是：
 

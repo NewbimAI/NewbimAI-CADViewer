@@ -42,6 +42,25 @@ MPL 是**文件级** copyleft，不是 GPL 那种传染式。可以做的事：
 - 版本 `0.186.0`，dxf-viewer 的依赖，我方也直接 import。
 - MIT 要求：保留版权与许可声明即可，无开源义务。
 
+## CADCraft（cadcraft-cli）— Apache-2.0 或 MIT
+
+- 包名：`cadcraft-cli`，**内置版本 `0.7.0`**（`bin/cadcraft/cadcraft-0.7.0-windows-x64-portable/`）
+- 上游：https://github.com/storytold/cadcraft （下载：https://github.com/storytold/cadcraft/releases）
+- **许可证：Apache-2.0 或 MIT 双许可**（上游同时提供 `LICENSE-APACHE` 与 `LICENSE-MIT`）。
+  这两份文本随转换器包一起分发，位于
+  `bin/cadcraft/cadcraft-<版本>-windows-x64-portable/` 目录内，**请勿删除**。
+- 用途：DWG → DXF 转换，以及 SVG / PDF / PNG 导出（`server/cadcraft.js` 调用）。
+  缺它时 DXF 只读功能仍可用。
+
+### 我们的分发方式（合规）
+
+1. **原样分发上游便携包，未修改任何文件**；包内的 `LICENSE-APACHE`、`LICENSE-MIT`
+   以及字体许可（`OFL-*.txt`）都原封保留。
+2. Apache-2.0 要求保留版权与许可声明、附带许可副本 —— 由包内文件满足；
+   我们未改动其文件，因此不存在"需声明修改"的情形。
+3. 不暗示上游对本项目的背书；本项目自身许可是 **AGPL-3.0-only**，与 cadcraft 的许可相互独立。
+4. **Windows 免安装包**（GitHub Releases）内含该目录；源码仓库不含（`.gitignore` 排除）。
+
 ## 字体
 
 **随包分发**（源文件在 `web/public/fonts/`，构建时进入 `web/dist/`，由静态服务提供）：

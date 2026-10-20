@@ -20,9 +20,11 @@ numbers you report are the *same numbers the UI shows*.
 ## Setup (once)
 
 ```bash
-# 1. the converter binary is not in the repo (127MB) — see README.md
-#    put the cadcraft portable package so that this exists:
-#    <repo>/bin/cadcraft/**/cadcraft-cli.exe
+# 1. the converter binary is not in the repo (~127MB unpacked).
+#    download `cadcraft-<ver>-windows-x64-portable.zip` from
+#    https://github.com/storytold/cadcraft/releases
+#    unzip so that this exists: <repo>/bin/cadcraft/**/cadcraft-cli.exe
+#    (verified with 0.7.0 and 0.8.0; DXF-only commands need no cadcraft)
 
 # 2. sanity check (tells you if root/cadcraft/fonts are found)
 node Skill/cadviewer/scripts/cad.mjs doctor

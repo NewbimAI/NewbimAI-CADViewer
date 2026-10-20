@@ -67,7 +67,8 @@ cadcraft-cli 未部署：未在 <root>\bin 下找到 cadcraft-cli.exe。
 <项目根>/bin/cadcraft/**/cadcraft-cli.exe
 ```
 
-（cadcraft 约 127MB，不在仓库里，需自行下载；`.gitignore` 已排除 `bin/cadcraft/`。）
+（cadcraft 约 127MB，不在仓库里：到 https://github.com/storytold/cadcraft/releases 下载
+`cadcraft-<版本>-windows-x64-portable.zip` 解压即可；`.gitignore` 已排除 `bin/cadcraft/`。）
 
 - 便携包有时只有 `cadcraft.exe`，`server/cadcraft.js` 也会回退使用它。
 - 装好后重跑 `doctor`，应看到 `version: cadcraft-cli 0.7.0` 之类的字符串。

@@ -38,10 +38,12 @@ node Skill/cadviewer/scripts/cad.mjs summary "<图纸目录>\示例图纸.dwg"
 
 - **Node.js 20+**
 - **cadcraft-cli 便携版**：本仓库**不含**转换器二进制（约 127MB，不适合进仓库）。
-  请把 cadcraft 便携包解压到 `bin/cadcraft/`，使下面这个路径存在：
+  从 https://github.com/storytold/cadcraft/releases 下载
+  `cadcraft-<版本>-windows-x64-portable.zip`，解压后使下面这个路径存在：
   ```
   bin/cadcraft/**/cadcraft-cli.exe
   ```
+  实测 **0.7.0** 与 **0.8.0** 均可正常工作。只想看 DXF 的话可以不装它（DXF 统计不依赖 cadcraft）。
 
 ## 启动
 

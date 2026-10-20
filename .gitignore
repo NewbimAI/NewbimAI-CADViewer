@@ -23,6 +23,12 @@ server/cache/
 /data/*
 !/data/README.md
 
+# Skill/CLI 文档示例的输出物（含图纸派生数据，别误提交）
+out.pdf
+out.svg
+out.png
+out-stats.json
+
 # 图纸文件本身：不管出现在哪个目录、什么大小写，都不提交
 *.dwg
 *.DWG
