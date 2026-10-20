@@ -203,6 +203,27 @@ node cad.mjs export "<图纸目录>\a.dwg" --to json --out stats.json
 
 ---
 
+## 轻量包（59 KB，给别的 agent / 容器用）
+
+```bash
+node scripts/build-skill.mjs      # → release/cadviewer-skill-<version>.zip
+```
+
+GitHub Release 里也有同名资产，可以直接下。
+
+包里只有 `Skill/` + CLI 实际 `import` 的 4 个模块（`cadcraft.js` `scanner.js` `tch-detect.js` `svg-pdf.js`），
+解压 **137 KB**、压缩 **59 KB**——不含 `web/`、字体、前端产物。
+
+- ✅ 能用：`summary` `stats` `layers` `blocks` `text` `tch`、`export --to json|dxf`
+- ❌ 不能用：`serve`（起界面需要完整项目的 `start.bat` + `web/dist`）
+- DWG 仍需自己放 `bin/cadcraft/`；`doctor` 会把缺 cadcraft / 缺字体列进 `degraded`，不影响 DXF
+- 用法：`node <包>/Skill/cadviewer/scripts/cad.mjs --root <包> summary 图纸.dxf`
+
+> 为什么四个模块就够：它们只依赖 Node 内置库，彼此不 import；`block-text.js` 只有
+> `dxf-web.js`（服务端渲染预处理）用，CLI 不需要。
+
+---
+
 ## 边界
 
 - 只读本地文件；除非用户明确要求，不要把图纸上传到任何外部服务。

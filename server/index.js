@@ -4,6 +4,7 @@ import multer from "multer";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveCliPath, CadcraftCli } from "./cadcraft.js";
 import { detectTch } from "./tch-detect.js";
@@ -40,6 +41,30 @@ const DATA_DIR = process.env.CADVIEWER_DATA
   : path.join(PROJECT_ROOT, "data");
 const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 const PORT = process.env.PORT || 3717;
+
+/**
+ * 监听地址：默认只绑回环，图纸不出本机。
+ * 只有显式设置 CADVIEWER_HOST 时才对外监听（例：0.0.0.0 让同一局域网里的
+ * 另一个 agent / 手机浏览器访问），启动日志会列出可用地址并明确警告。
+ */
+const HOST = (process.env.CADVIEWER_HOST || "127.0.0.1").trim();
+const LOOPBACK_HOST =
+  HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
+
+/** 对外监听时，列出本机所有非回环 IPv4 地址（给"同网段的另一台设备"用）。 */
+function lanUrls() {
+  const urls = [];
+  try {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const ni of list || []) {
+        if (ni.family === "IPv4" && !ni.internal) urls.push(`http://${ni.address}:${PORT}`);
+      }
+    }
+  } catch {
+    /* 取网卡失败不影响启动 */
+  }
+  return urls;
+}
 /** 缓存格式版本：算法/导出策略变化时 +1，旧缓存自动失效 */
 const CACHE_VERSION = "v14"; // v14: tch 改为分层结构 {level, classes, evidence}（老缓存不兼容）
 /**
@@ -331,6 +356,10 @@ app.get("/api/health", async (_req, res) => {
   res.json({
     ok: true,
     cli: cli ? { path: cliPath, version: await cli.version() } : null,
+    // 让 CLI / 别的 agent 知道这份服务绑在哪个地址、能不能从别的机器访问
+    host: HOST,
+    port: PORT,
+    lanUrls: LOOPBACK_HOST ? [] : lanUrls(),
   });
 });
 
@@ -812,10 +841,17 @@ if (fs.existsSync(distDir)) {
   });
 }
 
-const httpServer = app.listen(PORT, "127.0.0.1", () => {
-  console.log(
-    `[cadviewer] 服务已启动: http://127.0.0.1:${PORT} （仅本机访问，不上云）`
-  );
+const httpServer = app.listen(PORT, HOST, () => {
+  if (LOOPBACK_HOST) {
+    console.log(
+      `[cadviewer] 服务已启动: http://127.0.0.1:${PORT} （仅本机访问，不上云）`
+    );
+    return;
+  }
+  console.log(`[cadviewer] 服务已启动（对外监听 ${HOST}:${PORT}）：`);
+  console.log(`  http://127.0.0.1:${PORT}   （本机）`);
+  for (const u of lanUrls()) console.log(`  ${u}   （同一局域网可访问）`);
+  console.log("  ⚠ 同网段的其他设备能打开本服务，也就能看到你打开的图纸；用完请关掉。");
 });
 /**
  * 端口占用的常见成因：上一个实例刚被杀、Windows 上该端口的 TIME_WAIT 还没回收

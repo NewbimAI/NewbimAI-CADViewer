@@ -243,3 +243,28 @@ node --check Skill/cadviewer/scripts/cad.mjs
 - 支持格式只有 `.dwg` / `.dxf`；其它扩展名直接报错。
 - `export --out` 不允许指向源图纸本身（防止覆盖原文件）；父目录会自动创建。
 - 没有引入任何新的 npm 依赖，只用 Node 内置模块 + 仓库现有的 `server/**`。
+
+---
+
+## 13. `doctor` 报 `ok:true` 但 `degraded` 里有东西
+
+**这是正常的，不是故障。** `ok` 只由**必需项**决定：`node`、`project-root`、`cache`。
+
+| degraded 里有 | 含义 | 影响 |
+|---|---|---|
+| `cadcraft` | 没放 `bin/cadcraft/` | DWG 转换与 `svg\|pdf\|png` 导出不可用；DXF 统计/导出照常 |
+| `fonts` | 没有 `web/public/fonts/`（轻量包里必然没有） | 只影响界面文字渲染；**CLI 完全不读字体** |
+
+所以 `ok:true` + `degraded:["cadcraft","fonts"]` = "DXF 全能用，DWG/界面相关能力缺"。
+
+## 14. 别的机器 / 别的 agent 打不开 `127.0.0.1:3717`
+
+`127.0.0.1` 指的是**浏览器所在那台机器**。远端或沙箱里的 agent，它的 `127.0.0.1`
+是它自己的容器，不是你的电脑——这种情况下页面打不开是网络位置决定的，改配置没用。
+
+三种情况的判断与做法见 `SKILL.md` 的「在别的 agent / 别的机器里打开」。要点：
+
+- 同一台机器 → 直接 `serve` + `127.0.0.1`。
+- 同一局域网且能路由到宿主机 → 启动前 `set CADVIEWER_HOST=0.0.0.0`，
+  用 `GET /api/health` 返回的 `lanUrls` 里的地址；**用完记得关**（同网段可见你的图纸）。
+- 云端 / 沙箱 → 只能 `export --to png|svg|pdf` 把文件交给它看。

@@ -490,12 +490,14 @@ async function cmdDoctor(ctx) {
   const major = Number(process.versions.node.split(".")[0]);
   checks.push({
     check: "node",
+    required: true,
     ok: major >= 20,
     detail: `${process.version}（项目要求 >= 20）`,
   });
 
   checks.push({
     check: "project-root",
+    required: true,
     ok: true,
     detail: ctx.root,
   });
@@ -517,7 +519,15 @@ async function cmdDoctor(ctx) {
   } catch (e) {
     cliDetail = `检测 cadcraft 失败: ${e.message}`;
   }
-  checks.push({ check: "cadcraft", ok: cliOk, detail: cliDetail });
+  // 可选：缺它只影响 DWG 转换与 svg/pdf/png 导出，DXF 统计照常可用
+  checks.push({
+    check: "cadcraft",
+    required: false,
+    ok: cliOk,
+    detail: cliOk
+      ? cliDetail
+      : cliDetail + "（缺它只影响 DWG 转换与 svg/pdf/png 导出；DXF 功能不受影响）",
+  });
 
   let fontsOk = false;
   let fontsDetail = "";
@@ -534,7 +544,13 @@ async function cmdDoctor(ctx) {
   } catch (e) {
     fontsDetail = `字体目录不可读: ${e.message}`;
   }
-  checks.push({ check: "fonts", ok: fontsOk, detail: fontsDetail });
+  // 可选：字体只给界面渲染用，CLI 完全不读它（轻量包里没有 web/ 是正常的）
+  checks.push({
+    check: "fonts",
+    required: false,
+    ok: fontsOk,
+    detail: fontsOk ? fontsDetail : fontsDetail + "（只影响界面，CLI 不需要）",
+  });
 
   let cacheOk = false;
   let cacheDetail = "";
@@ -549,9 +565,14 @@ async function cmdDoctor(ctx) {
   } catch (e) {
     cacheDetail = `缓存目录不可写: ${cacheDir}（${e.message}）`;
   }
-  checks.push({ check: "cache", ok: cacheOk, detail: cacheDetail });
+  checks.push({ check: "cache", required: true, ok: cacheOk, detail: cacheDetail });
 
-  return { ok: checks.every((c) => c.ok), checks };
+  // ok 只由必需项决定；可选缺失放进 degraded，避免“DXF 明明能用却报红”
+  const required = checks.filter((c) => c.required !== false);
+  const degraded = checks
+    .filter((c) => c.required === false && !c.ok)
+    .map((c) => c.check);
+  return { ok: required.every((c) => c.ok), degraded, checks };
 }
 
 async function cmdSummary(ctx, srcAbs) {
@@ -901,14 +922,26 @@ async function cmdServe(ctx, opts) {
 
   const already = await ping();
   if (already) {
-    return { ok: true, running: true, started: false, url: base, health: already };
+    return {
+      ok: true,
+      running: true,
+      started: false,
+      url: base,
+      // health 里带着服务实际绑定的地址：host 不是回环时，lanUrls 就是"同网段可用地址"
+      host: already.host,
+      lanUrls: already.lanUrls || [],
+      health: already,
+    };
   }
   if (opts.status) {
     return {
       ok: false,
       running: false,
       url: base,
-      hint: `服务未运行。启动：${path.join(ctx.root, "start.bat")}（或 cd server && node index.js；端口可用 set PORT=${port} 覆盖）`,
+      hint:
+        `服务未运行。启动：${path.join(ctx.root, "start.bat")}` +
+        `（或 cd server && node index.js；端口可用 set PORT=${port} 覆盖）。` +
+        `要让同一局域网的另一台设备/agent 访问：启动前 set CADVIEWER_HOST=0.0.0.0`,
     };
   }
 
@@ -926,7 +959,16 @@ async function cmdServe(ctx, opts) {
     await new Promise((r) => setTimeout(r, 1000));
     const h = await ping();
     if (h) {
-      return { ok: true, running: true, started: true, url: base, waitedMs: i * 1000, health: h };
+      return {
+        ok: true,
+        running: true,
+        started: true,
+        url: base,
+        host: h.host,
+        lanUrls: h.lanUrls || [],
+        waitedMs: i * 1000,
+        health: h,
+      };
     }
   }
   fail(`120s 内服务未就绪（${base}/api/health 不通）。请查看 start.bat 窗口的输出。`);
@@ -936,7 +978,7 @@ const USAGE = {
   usage: "node Skill/cadviewer/scripts/cad.mjs <command> [file] [options]",
   commands: {
     doctor: "环境自检",
-    serve: "serve [--status]（确保本机服务在跑并返回地址；--status 只查不启动）",
+    serve: "serve [--status] [--port N]（确保服务在跑并返回地址；--status 只查不启动）",
     summary: "summary <file>",
     stats: "stats <file>",
     layers: "layers <file> [--all]",
