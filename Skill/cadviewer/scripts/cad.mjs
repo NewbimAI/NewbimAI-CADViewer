@@ -936,6 +936,38 @@ async function cmdServe(ctx, opts) {
     }
   };
 
+  // --foreground：给"会回收 detached 后台进程"的环境用（沙箱 / 托管任务）。
+  // 服务跑在当前进程里，stdout 直通，交给 agent 的任务管理器保活；结束本进程即停服。
+  if (opts.foreground) {
+    const entry = path.join(ctx.root, "server", "index.js");
+    if (!fs.existsSync(entry)) fail(`找不到 ${entry}，无法启动服务`);
+    const { spawn } = await import("node:child_process");
+    const child = spawn(process.execPath, [entry], {
+      cwd: path.join(ctx.root, "server"),
+      stdio: "inherit",
+      env: { ...process.env, PORT: port },
+    });
+    let healthy = null;
+    for (let i = 1; i <= 120; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      healthy = await ping();
+      if (healthy) break;
+    }
+    printJson({
+      ok: !!healthy,
+      mode: "foreground",
+      running: !!healthy,
+      url: base,
+      port,
+      pid: child.pid,
+      host: healthy ? healthy.host : undefined,
+      lanUrls: healthy && healthy.lanUrls ? healthy.lanUrls : [],
+      note: "前台运行：结束本进程即停服（交给 agent 的任务管理器保活）",
+    });
+    await new Promise((resolve) => child.on("exit", resolve));
+    process.exit(healthy ? 0 : 1);
+  }
+
   const already = await ping();
   if (already) {
     return {
@@ -968,6 +1000,24 @@ async function cmdServe(ctx, opts) {
   const entry = path.join(ctx.root, "server", "index.js");
   if (!fs.existsSync(entry)) {
     fail(`找不到 ${entry}，无法启动服务`);
+  }
+  // 全新 clone 里 server/node_modules 不存在（只有 express/cors/multer 三个生产依赖，约 3MB）。
+  // 这里自动装一遍，避免 agent 卡在 "Cannot find package 'express'"。
+  if (!fs.existsSync(path.join(ctx.root, "server", "node_modules"))) {
+    try {
+      const { execFileSync } = await import("node:child_process");
+      process.stderr.write("[cadviewer] 首次启动：安装 server 依赖（约 3MB）…\n");
+      execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
+        cwd: path.join(ctx.root, "server"),
+        stdio: "inherit",
+        shell: true,
+      });
+    } catch (e) {
+      fail(
+        `server 依赖缺失且自动安装失败（${e && e.message ? e.message : e}）。\n` +
+          `请手动执行: cd "${path.join(ctx.root, "server")}" && npm ci --omit=dev`
+      );
+    }
   }
   const { spawn } = await import("node:child_process");
   let pid = null;
@@ -1086,7 +1136,7 @@ const USAGE = {
   commands: {
     doctor: "环境自检",
     open: "open <file> [--port N]（SOP 一步到位：转 DXF → 起服务 → 返回可直接打开的链接 + 概要）",
-    serve: "serve [--status] [--port N]（确保服务在跑并返回地址；--status 只查不启动）",
+    serve: "serve [--status] [--port N] [--foreground]（确保服务在跑；--foreground 前台跑，给会回收后台进程的环境）",
     close: "close [--port N]（关闭后台服务；空闲 30 分钟也会自动退出）",
     summary: "summary <file>",
     stats: "stats <file>",

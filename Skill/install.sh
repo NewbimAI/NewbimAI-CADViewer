@@ -82,15 +82,53 @@ for dir in "${TARGETS[@]}"; do
   echo "     [OK] linked"; ok=$((ok+1))
 done
 
+# ---- cadcraft（DWG 转换器）：一次性装好；装好后只有打开 DWG 时才会被调用 ----
+CADCRAFT_VER="0.8.0"
+cli="$(find "$ROOT/bin/cadcraft" -name 'cadcraft-cli*' 2>/dev/null | head -1)"
+if [ -n "$cli" ]; then
+  echo "  cadcraft: already installed"
+elif [ -n "${SKIP_CADCRAFT:-}" ]; then
+  echo "  cadcraft: skipped (SKIP_CADCRAFT=1)"
+else
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) asset="cadcraft-$CADCRAFT_VER-windows-x64-portable.zip" ;;
+    Darwin)               asset="cadcraft-cli-$CADCRAFT_VER-macos-universal.zip" ;;
+    *)                    asset="" ;;
+  esac
+  if [ -z "$asset" ]; then
+    echo "  cadcraft: no official Linux build - install manually (see Skill/README.md)"
+  else
+    url="https://github.com/storytold/cadcraft/releases/download/v$CADCRAFT_VER/$asset"
+    tmp="${TMPDIR:-/tmp}/$asset"
+    echo "  cadcraft: downloading $asset (~57MB)..."
+    if curl -fL --retry 2 -o "$tmp" "$url"; then
+      mkdir -p "$ROOT/bin/cadcraft"
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -qo "$tmp" -d "$ROOT/bin/cadcraft"
+      else
+        tar -xf "$tmp" -C "$ROOT/bin/cadcraft"
+      fi
+      rm -f "$tmp"
+      if [ -n "$(find "$ROOT/bin/cadcraft" -name 'cadcraft-cli*' 2>/dev/null | head -1)" ]; then
+        echo "  cadcraft: installed"
+      else
+        echo "  cadcraft: [WARN] extracted but cli not found"
+      fi
+    else
+      echo "  cadcraft: [WARN] download failed - install manually: $url"
+    fi
+  fi
+fi
+
 echo ""
 echo "  $ok linked, $skip skipped"
 echo ""
-echo "Try it (no env vars needed):"
+echo "Next (the only step needed):"
 echo "  node \"$SOURCE/scripts/cad.mjs\" doctor"
-echo "  node \"$SOURCE/scripts/cad.mjs\" summary \"<path-to-drawing>.dxf\""
 echo ""
-echo "DWG needs the converter (optional): https://github.com/storytold/cadcraft/releases"
-echo "  unzip cadcraft-<ver>-*-portable.zip into $ROOT/bin/cadcraft/"
+echo "Do NOT run npm install / vite build - web/dist is already in the repo."
+echo "Do NOT hunt for a sample drawing to verify - doctor is enough."
+echo "cadcraft (DWG) is installed above; the local service starts on demand only."
 echo ""
 
 if [ "$skip" -gt 0 ] && [ "$ok" -eq 0 ]; then exit 2; fi

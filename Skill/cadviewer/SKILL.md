@@ -86,28 +86,55 @@ node Skill/cadviewer/scripts/cad.mjs close
 
 ## Setup (once)
 
+**只需要 Node.js 20+；其余（含 DWG 转换器）由安装脚本一次装好。**
+
+- ✅ **安装阶段把该装的都装好**（cadcraft 由 `install.ps1` / `install.sh` 自动下载解压），
+  之后不会再缺东西。
+- ✅ **但不要跑图纸验证**：装完跑一次 `doctor` 就结束，**不要**为了“验证”去搜索/下载 DWG 样本。
+- ✅ **仓库自带构建好的前端 `web/dist`** —— 不要 `npm install`、不要 `vite build`。
+- ✅ **服务按需启动**：`open` / `serve` 才起服务，且是后台静默启动；`close` 或用完空闲 30 分钟自动退出。
+
 ```bash
-# 1. the converter binary is not in the repo (~127MB unpacked).
-#    download `cadcraft-<ver>-windows-x64-portable.zip` from
-#    https://github.com/storytold/cadcraft/releases
-#    unzip so that this exists: <root>/bin/cadcraft/**/cadcraft-cli.exe
-#    (verified with 0.7.0 and 0.8.0; DXF-only commands need no cadcraft)
-#
-# 0. optional but recommended: register into your agent's skills folder —
-#    Windows:  powershell -ExecutionPolicy Bypass -File Skill\install.ps1
+# 1) 安装（注册 + 下载转换器 + 自检），一步到底
+#    Windows:     powershell -ExecutionPolicy Bypass -File Skill\install.ps1
 #    macOS/Linux: bash Skill/install.sh
-#    After that no CADVIEWER_ROOT is needed (the CLI finds the root by itself).
 
-# 2. sanity check (tells you if root/cadcraft/fonts are found)
+# 2) 确认（可选，安装脚本最后也会跑）
 node Skill/cadviewer/scripts/cad.mjs doctor
-
-# 3. 需要界面/浏览器时，一条命令确保服务在跑（没起会用 start.bat 拉起并等就绪）
-node Skill/cadviewer/scripts/cad.mjs serve          # → {"ok":true,"url":"http://127.0.0.1:3717", ...}
-node Skill/cadviewer/scripts/cad.mjs serve --status # 只查不启动
 ```
 
-The CLI finds the project root in this order: `--root <dir>` → env `CADVIEWER_ROOT` → walk up from
-the current directory. If it cannot find it, it errors out with the exact flag to pass — it never guesses.
+`ok:true` 就是装好了。`degraded` 里只剩 `fonts` 也算正常（字体只给界面渲染用，CLI 不读）。
+
+### 转换器 cadcraft（安装时一次装好）
+
+DWG → DXF 靠它。**装好放着不占资源**——只有真的打开 DWG、或导出 `svg|pdf|png` 时才会被调用。
+
+`install.ps1` / `install.sh` 会自动做下面两步（下载约 57MB）；离线或下载失败时会给出提示，
+不阻塞 Skill 的 DXF 功能：
+
+1. https://github.com/storytold/cadcraft/releases 下载 `cadcraft-<版本>-windows-x64-portable.zip`
+2. 解压到 `<root>/bin/cadcraft/`，使 `<root>/bin/cadcraft/**/cadcraft-cli.exe` 存在
+
+手动补装后重跑 `doctor`，`degraded` 里不再出现 `cadcraft` 即可。
+
+### 起界面
+
+```bash
+node Skill/cadviewer/scripts/cad.mjs open "<图纸>"   # 转 DXF + 起服务 + 给链接（推荐）
+node Skill/cadviewer/scripts/cad.mjs serve           # 只确保服务在跑
+node Skill/cadviewer/scripts/cad.mjs close           # 用完关掉（空闲 30 分钟也会自动退出）
+```
+
+⚠️ 如果所在运行环境会**回收 detached 后台进程**（部分沙箱 / 托管环境），改用：
+
+```bash
+node Skill/cadviewer/scripts/cad.mjs serve --foreground
+```
+
+它把服务跑在**当前进程**里（前台、stdout 直通），交给 agent 的任务管理器保活；
+输出里会给出 `url`，结束这个任务就停掉服务。
+
+项目根查找顺序：`--root` → 环境变量 `CADVIEWER_ROOT` → **脚本自身位置** → 当前目录。
 
 ## Answering questions about a drawing
 

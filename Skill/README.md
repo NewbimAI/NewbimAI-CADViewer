@@ -30,15 +30,19 @@ Skill/
 
 ## 依赖（重要）
 
+> **只需要 Node.js 20+。** 仓库里已带**构建好的前端 `web/dist`**——不要 `npm install`、
+> 不要 `vite build`（那是几分钟的浪费），clone 下来直接能用。
+
 这个 Skill 本身只是**薄壳**，运行时依赖原仓库里的两样东西：
 
 1. **`server/**` 模块**（只读复用）：`cadcraft.js`、`scanner.js`、`tch-detect.js`、`svg-pdf.js` 等。
    CLI 通过动态 `import()` 从项目根加载它们，**不会**把服务端代码复制进 Skill。
-2. **`bin/cadcraft/**` 转换器**（不在仓库内，需自行下载）：
-   上游 **https://github.com/storytold/cadcraft/releases** → 下载
+2. **`bin/cadcraft/**` 转换器**（DWG 必需；`install.ps1` / `install.sh` 会**自动下载并解压**）：
+   上游 **https://github.com/storytold/cadcraft/releases** →
    `cadcraft-<版本>-windows-x64-portable.zip`（约 57MB，解压后约 127MB），解压到
    `<项目根>/bin/cadcraft/`，使 `<项目根>/bin/cadcraft/**/cadcraft-cli.exe` 存在。
    实测 **0.7.0 / 0.8.0** 均兼容（开发时用 0.7.0）；`.gitignore` 已排除该目录。
+   装好放着不占资源——只有打开 DWG / 导出 `svg|pdf|png` 时才会被调用。
 
 没有 cadcraft（项目根仍满足“存在 `server/scanner.js`”判据——**不要求** `bin/`）时：DXF 的统计/文字/图层/图块仍可用；DWG 转换与 SVG/PDF/PNG 导出不可用（`doctor` 会指出）。
 
