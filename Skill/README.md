@@ -59,20 +59,33 @@ Skill/
 
 > 下文用 `<repo>` 指仓库根、`%USERPROFILE%` 指当前用户目录（cmd 里可直接用）；请按你的实际路径替换。
 
-### 一键注册（Windows，推荐）
+### 一键注册（推荐）
 
-在仓库根目录执行：
+在**解压后的目录**里执行（轻量包和完整仓库都适用）：
 
 ```bat
+:: Windows
 powershell -ExecutionPolicy Bypass -File Skill\install.ps1
 ```
 
-脚本会把 `Skill\cadviewer` 以**目录联接**（junction）注册到 `%USERPROFILE%\.config\opencode\skills\cadviewer`，仓库里的文档一改，Skill 立刻同步。
+```bash
+# macOS / Linux
+bash Skill/install.sh
+```
 
-- **幂等**：已注册且指向同一仓库时，直接返回成功（退出码 0），可反复运行。
-- 目标已存在、但不是链接（旧副本）时，默认跳过并提示；加 `-Force` 会删掉它再建联接。
-- 已注册但指向别的仓库时，同样加 `-Force` 重新指向。
-- 换个 skill 根目录：`-SkillsDir <目录>`。
+它会：
+
+- 把 `Skill/cadviewer` 以**目录联接 / 软链接**注册到 agent 的 skills 目录（不复制，文档一改立刻同步）
+- 自动识别本机**已存在**的 agent：OpenCode（`~/.config/opencode/skills`，总是装）、
+  Claude Code（`~/.claude/skills`）、Cursor（`~/.cursor/skills`）
+- 结束时打印 doctor 命令；**装完后不需要设置任何环境变量**
+
+可选项：
+
+- **幂等**：已注册且指向同一目录时直接成功（退出码 0），可反复运行。
+- 目标已存在但不是链接（旧副本）→ 默认跳过；加 `-Force`（bash 用 `--force`）会删掉它再建链接。
+- 已注册但指向别处 → 同样用 `-Force` 重新指向。
+- 只想装到指定目录：`-SkillsDir <目录>`（bash 用 `--skills-dir <目录>`）。
 
 下面是手动方式，效果相同，按需取用。
 
@@ -121,31 +134,28 @@ Linux/macOS：
 ln -s "/path/to/CADViewer/Skill/cadviewer" "$HOME/.config/opencode/skills/cadviewer"
 ```
 
-### 注册后必须设置 `CADVIEWER_ROOT`（除非项目就在原路径且 cwd 在项目内）
+### `CADVIEWER_ROOT`：现在**不再需要**（老版本才要）
 
-复制出去的 `scripts/cad.mjs` 已经不在仓库里，它靠根目录去找 `server/**` 与 `bin/cadcraft/`。**当项目不在原路径、或 agent 的工作目录不固定时**，必须告诉它仓库在哪：
+CLI 找项目根的顺序：
+
+1. `--root <目录>`
+2. 环境变量 `CADVIEWER_ROOT`
+3. **从脚本自身位置向上找** ← 这就是安装后免配置的原因：
+   轻量包布局是 `<包>/Skill/cadviewer/scripts/cad.mjs`，从脚本往上两级就能找到 `<包>/server/scanner.js`；
+   用 junction / 软链接注册时，Node 解析到的是**包内真实路径**，所以照样命中。
+4. 从当前工作目录向上找
+
+所以：**用 `install.ps1` / `install.sh` 装完就能直接跑，不需要设任何变量。**
+只有当你想把 CLI 复制到包外单独调用、或想让它指向**另一个**安装目录时，才需要 `--root` 或 `CADVIEWER_ROOT`：
 
 ```bat
-:: 临时
-set CADVIEWER_ROOT=<repo>
-
-:: 永久（新开终端生效）
-setx CADVIEWER_ROOT "<repo>"
+set CADVIEWER_ROOT=<解压目录>
 ```
-
-macOS / Linux：
 
 ```bash
-export CADVIEWER_ROOT=/path/to/CADViewer
-# 想长期生效，把上面这行写进 ~/.bashrc 或 ~/.zshrc
+export CADVIEWER_ROOT=/path/to/cadviewer-skill-0.1.0
+# 想长期生效，写进 ~/.bashrc 或 ~/.zshrc
 ```
-
-CLI 的根目录查找顺序：
-
-1. 命令行 `--root <目录>`
-2. 环境变量 `CADVIEWER_ROOT`
-3. 从当前工作目录逐级向上（判据：存在 `server/scanner.js`；**不要求** `bin/`，因为它被 gitignore、新克隆里没有）
-4. 都没有 → 明确报错，并告诉你怎么设；**不会**瞎猜路径
 
 验证：
 

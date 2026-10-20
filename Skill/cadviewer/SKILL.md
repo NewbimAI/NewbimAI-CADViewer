@@ -23,8 +23,13 @@ numbers you report are the *same numbers the UI shows*.
 # 1. the converter binary is not in the repo (~127MB unpacked).
 #    download `cadcraft-<ver>-windows-x64-portable.zip` from
 #    https://github.com/storytold/cadcraft/releases
-#    unzip so that this exists: <repo>/bin/cadcraft/**/cadcraft-cli.exe
+#    unzip so that this exists: <root>/bin/cadcraft/**/cadcraft-cli.exe
 #    (verified with 0.7.0 and 0.8.0; DXF-only commands need no cadcraft)
+#
+# 0. optional but recommended: register into your agent's skills folder —
+#    Windows:  powershell -ExecutionPolicy Bypass -File Skill\install.ps1
+#    macOS/Linux: bash Skill/install.sh
+#    After that no CADVIEWER_ROOT is needed (the CLI finds the root by itself).
 
 # 2. sanity check (tells you if root/cadcraft/fonts are found)
 node Skill/cadviewer/scripts/cad.mjs doctor

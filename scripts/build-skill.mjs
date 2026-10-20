@@ -51,13 +51,17 @@ fs.writeFileSync(
     轻量包里没有。要交互看图，请用完整版：
     https://github.com/NewbimAI/NewbimAI-CADViewer/releases
 
-怎么用
-  1) 需要 Node.js 20+
-  2) 用法一：直接把 Skill/cadviewer 链到 agent 的 skills 目录，并设置
-       CADVIEWER_ROOT=<本包解压目录>
-     用法二：不注册，直接调用
-       node <本包>/Skill/cadviewer/scripts/cad.mjs --root <本包> summary 图纸.dxf
-  3) 要开 DWG：从 https://github.com/storytold/cadcraft/releases 下载
+怎么用（两步）
+  1) 需要 Node.js 20+（这是唯一的必需运行时；DXF 统计不再需要别的东西）
+  2) 注册到 agent —— 会自动识别 OpenCode / Claude Code / Cursor：
+       Windows    : powershell -ExecutionPolicy Bypass -File Skill\install.ps1
+       macOS/Linux: bash Skill/install.sh
+     装完不需要设置任何环境变量（CLI 从自身位置就能找到本包）。
+
+  不注册也能直接用（cwd 在哪都行，不需要 --root）：
+       node <本包>/Skill/cadviewer/scripts/cad.mjs summary 图纸.dxf
+
+  3) 开 DWG（可选）：从 https://github.com/storytold/cadcraft/releases 下载
      cadcraft-<版本>-windows-x64-portable.zip，解压到 <本包>/bin/cadcraft/，
      使 <本包>/bin/cadcraft/**/cadcraft-cli.exe 存在，再跑 doctor 确认。
 

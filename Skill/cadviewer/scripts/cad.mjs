@@ -15,7 +15,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /* ───────────────────────── 通用工具 ───────────────────────── */
 
@@ -89,6 +89,22 @@ function resolveProjectRoot(explicitRoot) {
     return abs;
   }
 
+  // 3) 从**脚本自身位置**向上找。
+  //    轻量包的布局是 <包>/Skill/cadviewer/scripts/cad.mjs，所以只要 Skill 是从包里
+  //    链接/复制到 agent skills 目录的，就无需 --root、也无需 CADVIEWER_ROOT。
+  //    （Node 默认解析 symlink，import.meta.url 拿到的是包内真实路径。）
+  try {
+    let dir = path.dirname(fileURLToPath(import.meta.url));
+    while (true) {
+      if (isProjectRoot(dir)) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    /* 取脚本路径失败就继续走 cwd */
+  }
+
   let dir = process.cwd();
   while (true) {
     if (isProjectRoot(dir)) return dir;
@@ -101,8 +117,8 @@ function resolveProjectRoot(explicitRoot) {
     `找不到 CADViewer 项目根。请用以下任一方式指定：\n` +
       `  1) node cad.mjs <命令> ... --root "<CADViewer 项目根>"\n` +
       `  2) set CADVIEWER_ROOT=<CADViewer 项目根>\n` +
-      `判据：<根>/server/scanner.js 存在。\n` +
-      `（Skill 被复制到别处后必须用 --root 或 CADVIEWER_ROOT，CLI 不会瞎猜路径。）`
+      `  3) 运行 Skill\\install.ps1（或 install.sh）把 Skill 链进 agent 目录——装好后无需任何变量\n` +
+      `判据：<根>/server/scanner.js 存在。`
   );
 }
 
