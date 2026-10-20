@@ -48,6 +48,10 @@ bin/*.tar.gz
 # 本地打包产物（免安装便携版），由 scripts/build-portable.mjs 生成
 release/
 
+# .NET 构建中间产物（单文件启动器，scripts/build-sfx.mjs）
+scripts/SfxLauncher/bin/
+scripts/SfxLauncher/obj/
+
 # ============================================================
 #  内部资料（绝不公开）
 # ============================================================
