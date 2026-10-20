@@ -1,121 +1,124 @@
-// CADViewer 单文件启动器（唯一职责：把内嵌的便携包解压到用户目录，然后启动 start.bat）
-//
-// 为什么不做“真·内存运行”：cadcraft-cli 是独立 exe，Node 的 worker 线程也要真实文件，
-// 全部必须落盘；所以这里采用“首次运行解压一次，之后直接复用”的做法。
-//
-// 消息保持 ASCII：避免不同终端代码页下的乱码。
-using System;
-using System.Diagnostics;
+﻿using System;
 using System.IO;
 using System.IO.Compression;
 using System.Reflection;
+using System.Windows.Forms;
 
-internal static class Program
+namespace CadViewer
 {
-    // 与 release/CADViewer-<version>-win64.zip 内部顶层目录一致
-    private const string Version = "0.1.0";
-    private const string AppFolder = "CADViewer-" + Version + "-win64";
-
-    private static int Main(string[] args)
+    internal static class Program
     {
-        try
+        internal const string Version = "0.1.0";
+        internal const string AppFolder = "CADViewer-" + Version + "-win64";
+
+        internal static string BaseDir
         {
-            string baseDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "CADViewer",
-                Version);
-            string appDir = Path.Combine(baseDir, AppFolder);
-            string marker = Path.Combine(appDir, "start.bat");
+            get
+            {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CADViewer", Version);
+            }
+        }
+
+        internal static string AppDir { get { return Path.Combine(BaseDir, AppFolder); } }
+        internal static string LogDir { get { return Path.Combine(BaseDir, "logs"); } }
+
+        internal static void Log(string msg)
+        {
+            try
+            {
+                Directory.CreateDirectory(LogDir);
+                File.AppendAllText(Path.Combine(LogDir, "host.log"),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + msg + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        [STAThread]
+        private static void Main(string[] args)
+        {
+            Hooks.Install();
+            Log("=== 启动 pid=" + Environment.ProcessId + " args=" + string.Join(" ", args));
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch (Exception ex) { Log("SetHighDpiMode 失败: " + ex.Message); }
 
             bool reinstall = false;
+            string initialFile = null;
             foreach (string a in args)
             {
-                if (string.Equals(a, "--reinstall", StringComparison.OrdinalIgnoreCase)) reinstall = true;
+                if (string.Equals(a, "--reinstall", StringComparison.OrdinalIgnoreCase)) { reinstall = true; continue; }
+                if (!a.StartsWith("-") && File.Exists(a)) initialFile = Path.GetFullPath(a);
             }
 
-            if (reinstall && Directory.Exists(baseDir))
+            if (reinstall)
             {
-                Console.WriteLine("Removing previous extraction: " + baseDir);
-                try { Directory.Delete(baseDir, true); }
-                catch (Exception ex) { Console.Error.WriteLine("WARN: could not fully remove: " + ex.Message); }
+                try { if (Directory.Exists(BaseDir)) Directory.Delete(BaseDir, true); Log("--reinstall：已删除 " + BaseDir); }
+                catch (Exception ex) { Log("--reinstall 删除失败: " + ex.Message); }
             }
 
-            if (!File.Exists(marker))
+            try
             {
-                Console.WriteLine("CADViewer " + Version);
-                Console.WriteLine("First run: extracting to");
-                Console.WriteLine("  " + baseDir);
-                Console.WriteLine("About 225 MB, this takes a few seconds...");
-                Console.WriteLine();
-
-                Directory.CreateDirectory(baseDir);
-
-                Assembly asm = Assembly.GetExecutingAssembly();
-                Stream res = asm.GetManifestResourceStream("payload.zip");
-                if (res == null)
+                if (!File.Exists(Path.Combine(AppDir, "start.bat")))
                 {
-                    Console.Error.WriteLine("ERROR: embedded payload not found. This exe was built without PayloadPath.");
-                    return 2;
+                    Log("首次运行，开始解压到 " + BaseDir);
+                    ExtractPayload();
+                    Log("解压完成");
                 }
-
-                string tmpZip = Path.Combine(Path.GetTempPath(), "cadviewer-" + Guid.NewGuid().ToString("N") + ".zip");
-                try
+                else
                 {
-                    using (res)
-                    using (FileStream outFs = File.Create(tmpZip))
-                    {
-                        res.CopyTo(outFs);
-                    }
-                    ZipFile.ExtractToDirectory(tmpZip, baseDir, true);
+                    Log("已解压，跳过解压步骤");
                 }
-                finally
-                {
-                    try { if (File.Exists(tmpZip)) File.Delete(tmpZip); } catch { }
-                }
-
-                Console.WriteLine("Extraction done.");
             }
-            else
+            catch (Exception ex)
             {
-                Console.WriteLine("CADViewer " + Version + " (already extracted)");
-            }
-
-            if (!File.Exists(marker))
-            {
-                Console.Error.WriteLine("ERROR: start.bat missing after extraction: " + marker);
-                Console.Error.WriteLine("Try running this exe again with --reinstall");
-                Pause();
-                return 3;
+                Log("解压失败: " + ex);
+                MessageBox.Show(
+                    "解压安装包失败：\n" + ex.Message +
+                    "\n\n可用 --reinstall 参数重新运行本程序再试一次。",
+                    "CADViewer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
             }
 
-            Console.WriteLine("Starting... (close the CADViewer console window to stop the server)");
-            Process.Start(new ProcessStartInfo
+            try
             {
-                FileName = marker,
-                WorkingDirectory = appDir,
-                UseShellExecute = true,
-            });
-            return 0;
+                Application.Run(new MainForm(initialFile));
+                Log("=== 正常退出 ===");
+            }
+            catch (Exception ex)
+            {
+                Log("Application.Run 抛出: " + ex);
+                MessageBox.Show("程序异常退出：\n" + ex.Message, "CADViewer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
-        catch (Exception ex)
+
+        /// <summary>首次运行：把内嵌的便携包解压到 %LOCALAPPDATA%\CADViewer\&lt;version&gt;。</summary>
+        private static void ExtractPayload()
         {
-            Console.Error.WriteLine("ERROR: " + ex.Message);
-            Pause();
-            return 1;
-        }
-    }
+            Directory.CreateDirectory(BaseDir);
 
-    private static void Pause()
-    {
-        try
-        {
-            if (!Console.IsInputRedirected)
+            Stream res = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip");
+            if (res == null)
             {
-                Console.WriteLine();
-                Console.WriteLine("Press any key to exit...");
-                Console.ReadKey(true);
+                throw new InvalidOperationException("exe 内没有内嵌安装包（构建时缺少 PayloadPath）。");
+            }
+
+            string tmp = Path.Combine(Path.GetTempPath(), "cadviewer-" + Guid.NewGuid().ToString("N") + ".zip");
+            try
+            {
+                using (res)
+                using (FileStream outFs = File.Create(tmp))
+                {
+                    res.CopyTo(outFs);
+                }
+                ZipFile.ExtractToDirectory(tmp, BaseDir, true);
+            }
+            finally
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
             }
         }
-        catch { }
     }
 }

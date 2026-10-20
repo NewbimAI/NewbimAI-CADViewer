@@ -1,8 +1,10 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- WinForms + WebView2：真桌面窗口（无地址栏/标签栏） -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>CADViewer</AssemblyName>
@@ -10,22 +12,33 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 图标（资源管理器 / 任务栏 / 标题栏）；由 web/public/logo.svg 光栅化而来 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+
     <!-- 单文件 + 自包含：目标机器不需要装 .NET -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
-    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <!-- WinForms 不支持裁剪，关掉（否则可能运行时崩） -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- WebView2Loader.dll 是原生库，必须一起塞进单文件，否则 exe 单独拿出去会启动失败 -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
     <Version>0.1.0</Version>
     <Product>CADViewer</Product>
     <Company>NewbimAI</Company>
     <FileVersion>0.1.0.0</FileVersion>
+    <AssemblyTitle>CADViewer</AssemblyTitle>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+  </ItemGroup>
 
   <!--
     构建时把便携包 zip 作为嵌入资源塞进 exe。
-    仓库里没有这个 zip（release/ 被忽略），所以用 PayloadPath 传入；
-    未传时仍能编译（只是运行时会报 payload missing）。
+    仓库里没有这个 zip（release/ 被忽略），所以用 PayloadPath 传入。
   -->
   <ItemGroup Condition="'$(PayloadPath)' != ''">
     <EmbeddedResource Include="$(PayloadPath)" LogicalName="payload.zip" />
