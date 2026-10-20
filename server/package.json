@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "Local CAD drawing viewer server powered by cadcraft-cli",
+  "license": "AGPL-3.0-only",
+  "author": "NewbimAI (https://github.com/NewbimAI)",
   "scripts": {
     "start": "node index.js"
   },
