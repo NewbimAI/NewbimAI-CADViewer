@@ -45,6 +45,11 @@ npx tsc --noEmit -p tsconfig.json
 npm run build
 ```
 
+> ⚠️ **改了 `web/` 前端，必须 `npm run build` 并把 `web/dist` 一起提交。**
+> 仓库分发预构建产物（`web/dist` 在 `.gitignore` 里被显式放行），
+> 这样别人 `git clone` 后能直接起界面，不必花几分钟 `npm install` + 构建。
+> 忘了提交 → `dist` 与源码漂移，别人看到的界面是旧的。
+
 改动前请留意两个版本号（**不 bump 的话用户命中旧缓存，改动看不到**）：
 
 | 改了什么 | 要动的版本号 | 位置 |

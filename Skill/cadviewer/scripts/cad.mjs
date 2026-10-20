@@ -1009,7 +1009,8 @@ async function cmdServe(ctx, opts) {
       process.stderr.write("[cadviewer] 首次启动：安装 server 依赖（约 3MB）…\n");
       execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
         cwd: path.join(ctx.root, "server"),
-        stdio: "inherit",
+        // 丢弃 npm 输出：保证本命令的 stdout 只有一个 JSON，agent 能直接 parse
+        stdio: ["ignore", "ignore", "ignore"],
         shell: true,
       });
     } catch (e) {
