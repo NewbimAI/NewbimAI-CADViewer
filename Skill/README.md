@@ -51,7 +51,7 @@ Skill/
 - **`bin/cadcraft/`（Windows 便携版转换器）需单独下载**
   （https://github.com/storytold/cadcraft/releases ），仓库不含。缺它时 DWG 转换与 `svg|pdf|png` 导出不可用；DXF 的只读命令仍可用。
 - **Windows**：完整功能——DWG 转换、`dxf|svg|pdf|png|json` 导出、`serve` 起界面。
-- **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `tch`，以及 `export --to json|dxf`。DWG 与图片/PDF 导出不支持（cadcraft 只提供 Windows 构建）。
+- **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `tch`，以及 `export --to json|dxf`。DWG 与图片/PDF 导出**本项目未验证**：cadcraft 上游提供 Windows 与 macOS 构建（无 Linux CLI），但我们只在 Windows 上实测过。
 
 ---
 

@@ -15,7 +15,7 @@ numbers you report are the *same numbers the UI shows*.
 
 **示例数据**：本文档与参考文档里的图纸名、图层名、图块名及统计数字均为虚构示例，不代表任何真实图纸。
 
-**平台支持**：Windows 为完整功能（DWG 转换、四类导出、`serve` 起界面）。macOS / Linux 下仅 DXF 可用的只读命令（`summary` `layers` `blocks` `text` `stats` `tch`）与 `export --to json|dxf` 可用；DWG 转换与 `svg|pdf|png` 导出依赖 Windows 版 cadcraft，`serve` 依赖 `start.bat`，在非 Windows 上不可用。
+**平台支持**：Windows 为完整功能且**已实测**（DWG 转换、四类导出、`serve` 起界面）。macOS / Linux 下可用的是 DXF 只读命令（`summary` `layers` `blocks` `text` `stats` `tch`）与 `export --to json|dxf`；DWG 转换与 `svg|pdf|png` 导出依赖 cadcraft（上游有 Windows 与 macOS 构建，本项目仅在 Windows 实测），`serve` 依赖 `start.bat`，在非 Windows 上不可用。
 
 ## Setup (once)
 
