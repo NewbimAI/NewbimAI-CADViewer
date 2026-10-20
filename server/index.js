@@ -111,6 +111,17 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 /**
+ * 活动时间戳：用于"空闲自动退出"。
+ * 这是一台给本机 agent / 浏览器按需起的小服务，用完就该走，不该常驻。
+ * 任何 API 请求（含 /api/health 轮询、导出状态轮询）都会刷新它。
+ */
+let lastActivity = Date.now();
+app.use((req, _res, next) => {
+  lastActivity = Date.now();
+  next();
+});
+
+/**
  * 修复上传文件名乱码：busboy 把 UTF-8 文件名按 latin1 解出，中文会变成
  * "é¢å°å¤ªè¡..." 这类乱码（这正是"图纸名称未准确解析"的根因）。
  * 纯 ASCII 名 latin1→utf8 往返不变；已经是正确 UTF-8 的名字解出会含替换符，则保留原值。
@@ -841,6 +852,28 @@ if (fs.existsSync(distDir)) {
   });
 }
 
+/**
+ * 主动关闭：只接受回环来源（127.0.0.1 / ::1），
+ * 避免对外监听时被同网段的人把服务关掉。CLI 的 `close` 命令用它。
+ */
+app.post("/api/shutdown", (req, res) => {
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || "";
+  const local = ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  if (!local) {
+    res.status(403).json({ ok: false, error: "只允许本机关闭" });
+    return;
+  }
+  res.json({ ok: true, stopping: true });
+  setTimeout(() => {
+    try {
+      httpServer.close(() => process.exit(0));
+    } catch {
+      /* ignore */
+    }
+    setTimeout(() => process.exit(0), 2000).unref();
+  }, 100);
+});
+
 const httpServer = app.listen(PORT, HOST, () => {
   if (LOOPBACK_HOST) {
     console.log(
@@ -853,6 +886,25 @@ const httpServer = app.listen(PORT, HOST, () => {
   for (const u of lanUrls()) console.log(`  ${u}   （同一局域网可访问）`);
   console.log("  ⚠ 同网段的其他设备能打开本服务，也就能看到你打开的图纸；用完请关掉。");
 });
+
+/**
+ * 空闲自动退出：默认 30 分钟没有任何请求就退出（CADVIEWER_IDLE_EXIT_MIN=0 关闭）。
+ * 这个服务是按需起的，用完不该常驻占端口；CLI 的 `close` 可以立刻关。
+ */
+const IDLE_EXIT_MIN = Number(process.env.CADVIEWER_IDLE_EXIT_MIN ?? 30);
+if (Number.isFinite(IDLE_EXIT_MIN) && IDLE_EXIT_MIN > 0) {
+  const limitMs = IDLE_EXIT_MIN * 60 * 1000;
+  setInterval(() => {
+    if (Date.now() - lastActivity < limitMs) return;
+    console.log(`[cadviewer] 空闲超过 ${IDLE_EXIT_MIN} 分钟，自动退出`);
+    try {
+      httpServer.close(() => process.exit(0));
+    } catch {
+      /* ignore */
+    }
+    setTimeout(() => process.exit(0), 2000).unref();
+  }, 30 * 1000).unref();
+}
 /**
  * 端口占用的常见成因：上一个实例刚被杀、Windows 上该端口的 TIME_WAIT 还没回收
  * （Node 在 Windows 不设 SO_REUSEADDR，TIME_WAIT 期间重绑会 EADDRINUSE）。

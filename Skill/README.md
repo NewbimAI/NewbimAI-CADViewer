@@ -177,6 +177,9 @@ node cad.mjs doctor
 node cad.mjs open "<图纸目录>\示例图纸.dwg"
 # → {"ok":true,"url":"http://127.0.0.1:3717/?open=...","digest":{...},"next":[...]}
 
+# 用完关掉（后台静默启动，空闲 30 分钟也会自动退出）
+node cad.mjs close
+
 # 一张图的全貌（实体/图层/图块/文字/天正/告警）
 node cad.mjs summary "<图纸目录>\示例图纸.dwg"
 
@@ -241,6 +244,11 @@ GitHub Release 里也有同名资产，可以直接下。
 ## 边界
 
 - 只读本地文件；除非用户明确要求，不要把图纸上传到任何外部服务。
+- **服务按需起、用完关**：只有 `open` / `serve` 会启动服务，而且是**后台静默启动**
+  （不弹控制台窗口、不打开系统浏览器）；`close` 立即关，空闲 30 分钟也会自动退出。
+  其余命令（`summary` `blocks` `export` …）完全不起服务。
+- **安装不交互**：`install.ps1` / `install.sh` 不读任何输入（无 `Read-Host`/`pause`），
+  可直接在 agent 的命令里调用。
 - 本 Skill **不修改** `server/**`、`web/**`、`start.bat`；`server/**` 只作为只读模块 import。
 - 不引入任何新的 npm 依赖（只用 Node 内置 + 仓库现有模块）。
 - `Skill/cadviewer/SKILL.md` 是给 agent 的指令，改 CLI 行为时要同步检查它。

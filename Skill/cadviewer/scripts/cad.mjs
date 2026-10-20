@@ -955,22 +955,36 @@ async function cmdServe(ctx, opts) {
       running: false,
       url: base,
       hint:
-        `服务未运行。启动：${path.join(ctx.root, "start.bat")}` +
-        `（或 cd server && node index.js；端口可用 set PORT=${port} 覆盖）。` +
+        `服务未运行。用 cad.mjs open <图纸> 或 serve 静默启动（不弹窗口、不开浏览器）；` +
+        `用完用 close 关，空闲 ${process.env.CADVIEWER_IDLE_EXIT_MIN ?? 30} 分钟也会自动退出。` +
         `要让同一局域网的另一台设备/agent 访问：启动前 set CADVIEWER_HOST=0.0.0.0`,
     };
   }
 
-  const bat = path.join(ctx.root, "start.bat");
-  if (!fs.existsSync(bat)) {
-    fail(`找不到 ${bat}，无法自动启动；请手动运行 node server/index.js`);
+  // 直接后台起 server/index.js，**不经 start.bat / explorer**：
+  //  · 不弹控制台窗口（windowsHide + stdio:ignore）
+  //  · 不自动打开系统浏览器（那是 start.bat 给人双击时的行为）
+  //  · detached + unref：CLI 退出后服务继续活着，直到 `close` 或空闲超时
+  const entry = path.join(ctx.root, "server", "index.js");
+  if (!fs.existsSync(entry)) {
+    fail(`找不到 ${entry}，无法启动服务`);
   }
   const { spawn } = await import("node:child_process");
+  let pid = null;
   try {
-    spawn("explorer.exe", [bat], { detached: true, stdio: "ignore" }).unref();
+    const child = spawn(process.execPath, [entry], {
+      cwd: path.join(ctx.root, "server"),
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+      env: { ...process.env, PORT: port },
+    });
+    child.unref();
+    pid = child.pid;
   } catch (e) {
-    fail(`自动启动失败（${e && e.message ? e.message : e}）；请手动运行 ${bat}`);
+    fail(`后台启动失败（${e && e.message ? e.message : e}）；请手动运行 node ${entry}`);
   }
+
   for (let i = 1; i <= 120; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     const h = await ping();
@@ -982,12 +996,35 @@ async function cmdServe(ctx, opts) {
         url: base,
         host: h.host,
         lanUrls: h.lanUrls || [],
+        pid,
+        autoExitMinutes: Number(process.env.CADVIEWER_IDLE_EXIT_MIN ?? 30),
         waitedMs: i * 1000,
         health: h,
       };
     }
   }
-  fail(`120s 内服务未就绪（${base}/api/health 不通）。请查看 start.bat 窗口的输出。`);
+  fail(`120s 内服务未就绪（${base}/api/health 不通）。pid=${pid}`);
+}
+
+/* ───────────────────────── close：用完即关 ───────────────────────── */
+
+/**
+ * 关闭后台服务（POST /api/shutdown，仅接受回环来源）。
+ * 服务本来就空闲 30 分钟自动退出，这个命令是用完立刻走、不留后台进程。
+ */
+async function cmdClose(ctx, opts) {
+  const port = String(opts.port || process.env.PORT || 3717);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const r = await fetch(base + "/api/shutdown", {
+      method: "POST",
+      signal: AbortSignal.timeout(4000),
+    });
+    const j = await r.json().catch(() => ({}));
+    return { ok: r.ok, stopped: r.ok, url: base, response: j };
+  } catch {
+    return { ok: true, stopped: false, url: base, hint: "服务本来就没在跑（无需关闭）" };
+  }
 }
 
 /* ───────────────────── open：SOP 一步到位（转 DXF → 链接 + 概要） ───────────────────── */
@@ -1039,6 +1076,7 @@ async function cmdOpen(ctx, srcAbs, opts) {
       "用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
       "把 digest 里的数字讲给用户，并问接下来做什么",
       "可提示：导出 PDF（A3 打印）、PNG（发人看）、DXF（给别人编辑）、JSON（存档）",
+      "用户看完了就跑 cad.mjs close（服务空闲 30 分钟也会自己退出）",
     ],
   };
 }
@@ -1049,6 +1087,7 @@ const USAGE = {
     doctor: "环境自检",
     open: "open <file> [--port N]（SOP 一步到位：转 DXF → 起服务 → 返回可直接打开的链接 + 概要）",
     serve: "serve [--status] [--port N]（确保服务在跑并返回地址；--status 只查不启动）",
+    close: "close [--port N]（关闭后台服务；空闲 30 分钟也会自动退出）",
     summary: "summary <file>",
     stats: "stats <file>",
     layers: "layers <file> [--all]",
@@ -1089,6 +1128,10 @@ async function main() {
   }
   if (command === "serve") {
     printJson(await cmdServe(ctx, opts));
+    return;
+  }
+  if (command === "close") {
+    printJson(await cmdClose(ctx, opts));
     return;
   }
 

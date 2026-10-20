@@ -61,6 +61,20 @@ node Skill/cadviewer/scripts/cad.mjs open "<图纸.dwg|dxf>"
    - 存档 / 给程序读 → `export --to json`
    - 看某层 / 某块 → 界面里双击该行聚焦
 
+**服务生命周期（不用你操心）**：`open` / `serve` 会**在后台静默启动**服务 ——
+不弹控制台窗口、不打开系统浏览器、不占你的终端；命令返回后服务继续活着，
+看完让 agent 跑一句就关：
+
+```bash
+node Skill/cadviewer/scripts/cad.mjs close
+```
+
+兜底还有**空闲 30 分钟自动退出**（`CADVIEWER_IDLE_EXIT_MIN` 可调，`0` = 不退出）。
+
+- 只有 `open` / `serve` 会启动服务；`summary` `stats` `layers` `blocks` `text` `tch`
+  `export` 全是**纯本地只读**，不会起服务、不留后台进程。
+- 服务只监听 `127.0.0.1`（除非你显式设 `CADVIEWER_HOST`）。
+
 **前提：先判断你的浏览器能不能访问那个地址。** 链接里的 `127.0.0.1` 指的是
 **浏览器所在那台机器**：
 
