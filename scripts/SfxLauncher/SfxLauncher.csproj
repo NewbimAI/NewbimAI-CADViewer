@@ -25,10 +25,10 @@
     <!-- WebView2Loader.dll 是原生库，必须一起塞进单文件，否则 exe 单独拿出去会启动失败 -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Product>CADViewer</Product>
     <Company>NewbimAI</Company>
-    <FileVersion>0.1.0.0</FileVersion>
+    <FileVersion>0.2.0.0</FileVersion>
     <AssemblyTitle>CADViewer</AssemblyTitle>
   </PropertyGroup>
 

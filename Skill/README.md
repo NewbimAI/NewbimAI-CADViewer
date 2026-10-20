@@ -153,7 +153,7 @@ set CADVIEWER_ROOT=<解压目录>
 ```
 
 ```bash
-export CADVIEWER_ROOT=/path/to/cadviewer-skill-0.1.0
+export CADVIEWER_ROOT=/path/to/cadviewer
 # 想长期生效，写进 ~/.bashrc 或 ~/.zshrc
 ```
 

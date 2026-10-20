@@ -34,7 +34,6 @@ execFileSync(
     "-r", "win-x64",
     "--self-contained", "true",
     "-p:PublishSingleFile=true",
-    "-p:EnableCompressionInSingleFile=false",
     `-p:PayloadPath=${zip}`,
     "-o", outDir,
   ],
