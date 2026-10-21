@@ -535,7 +535,7 @@ export function flattenTexts(dxfPath, opts = {}) {
   };
 
   /* 顶层 INSERT 的缩放：顶层 ATTRIB 的坐标已经是世界坐标（实测 attr.pos ≈ ins.pos），
-   * 只有**字高**还是块内值，必须乘这个缩放 —— 这正是 dxf-viewer 漏掉的那一步。 */
+   * 只有**字高**还要不要再乘这个缩放，取决于 ATTRIB 里的 h 是哪种形态（见下面）。 */
   const topScale = new Map();
   const topBlock = new Map(); // INSERT 句柄 → 块名（顶层 ATTRIB 归属到它所属的 INSERT）
   for (const e of tops) {
@@ -543,6 +543,17 @@ export function flattenTexts(dxfPath, opts = {}) {
       topScale.set(e.handle, Math.abs(e.sx ?? 1) || 1);
       topBlock.set(e.handle, e.name ?? null);
     }
+  }
+
+  /* 块内 ATTDEF 模板字高：块名 → (tag → 字高)。
+   * 用来判断同名 ATTRIB 的 h 是「块内值」还是「已经烘焙成世界值」——两种图都真实存在。 */
+  const attdefHeights = new Map();
+  for (const [bname, b] of blocks) {
+    const m = new Map();
+    for (const e of b.ents) {
+      if (e.type === "ATTDEF" && e.tag && Number.isFinite(e.h) && e.h > 0) m.set(e.tag, e.h);
+    }
+    if (m.size) attdefHeights.set(bname, m);
   }
 
   for (const e of tops) {
@@ -554,8 +565,21 @@ export function flattenTexts(dxfPath, opts = {}) {
     } else if (e.type === "ATTRIB") {
       if (out.length >= MAX_OUT) break;
       const s = topScale.get(e.owner) ?? 1;
-      /* 位置不动（已是世界坐标），字高乘插入缩放 */
-      emit(e, IDENT, s, topBlock.get(e.owner) ?? null);
+      const blk = topBlock.get(e.owner) ?? null;
+      /* 位置不动（已是世界坐标）。**字高必须逐个判**，因为两种形态都真实存在：
+       *   · 块内值      → 要 ×s（dxf-viewer 漏掉的就是这一步）
+       *   · 已烘焙的世界值 → 再乘就放大 s 倍
+       * 判据：以块里同 tag 的 ATTDEF 字高为基准，期望世界字高 = attdefH × s，
+       *       取 raw 与 raw×s 中更接近期望的那个。
+       * 实测（实用旋转楼梯全套图）：ATTRIB h=187 已经 = ATTDEF 5.5 × 34，
+       *       再乘 34 → 6358，文字糊成一片盖住整张图。 */
+      let hScale = s;
+      const tmpl = blk ? (attdefHeights.get(blk) || new Map()).get(e.tag) : undefined;
+      if (Number.isFinite(tmpl) && tmpl > 0) {
+        const expected = tmpl * s;
+        hScale = Math.abs(e.h - expected) <= Math.abs(e.h * s - expected) ? 1 : s;
+      }
+      emit(e, IDENT, hScale, blk);
     }
     /* 顶层 TEXT / MTEXT 不在这里出：dxf-viewer 本来就能正确渲染它们，
      * 再注入一份就是重影。本模块只负责"引擎画不出来的那部分"。 */

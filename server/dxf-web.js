@@ -207,7 +207,7 @@ function scanTables(dxfPath) {
 }
 
 /** 改产出格式（注入规则/解码规则）就 +1，缓存文件名随之变化，旧文件自动失效 */
-export const DXF_WEB_VERSION = 12; // v12: %%C 统一映射 φ；不可见属性救援（模板标志判定）；收紧展平文字二选一
+export const DXF_WEB_VERSION = 13; // v13: 顶层 ATTRIB 字高按 ATTDEF 模板判形态，避免缩放乘两次（旋转楼梯图字糊成一片）
 
 /** 聚焦时"变灰"用的 ACI 颜色（8 = 深灰）。想调成其它灰度改这一个常量即可。 */
 export const FOCUS_MUTED_COLOR = 8;

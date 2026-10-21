@@ -1105,7 +1105,8 @@ async function cmdOpen(ctx, srcAbs, opts) {
   return {
     ok: true,
     url: primary,
-    urlNote: "本机链接：服务在跑时才能打开。请把 url 一起发给用户，方便他下次直接点开。",
+    urlNote: "本机链接：服务在跑时才能打开。请用 Markdown 超链接给用户（可直接点开），不要只贴裸 URL。",
+    urlMarkdown: `[打开 CADViewer 界面](${primary})`,
     localUrl: local,
     host: served.host,
     lanUrls: served.lanUrls || [],
@@ -1127,7 +1128,7 @@ async function cmdOpen(ctx, srcAbs, opts) {
       warnings: summary.warnings,
     },
     next: [
-      "把 url 原文贴给用户（本机链接：服务在跑的时候才能打开；端口默认固定 3717，下次服务起来后同一个链接还能用）",
+      "把链接以 **Markdown 超链接**给用户（界面里可点开）：[打开 CADViewer 界面](url) —— 不要只贴裸 URL",
       "同时用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
       "用 digest 把图里的基本情况讲清楚，然后问用户接下来做什么",
       "把可选操作列成选项让用户选，不要擅自导出：PDF（A3 打印）/ PNG（发人看）/ DXF（给别人编辑）/ JSON（存档）",

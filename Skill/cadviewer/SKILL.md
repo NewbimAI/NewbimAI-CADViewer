@@ -52,7 +52,9 @@ node Skill/cadviewer/scripts/cad.mjs open "<图纸.dwg|dxf>"
    - 打开返回的 `url` —— 界面与正常网页**完全一致**：缩放/平移、图层与图块面板
      （双击行 = 聚焦，单击还原）、右上「导出」下拉。
      等左下状态条 `data-dxf-status` 变成 `done` 再截图，别截中间态。
-   - **同时在回复里把 `url` 原文贴给用户**（配合 `urlNote` 说明），方便他下次直接点开。
+   - **同时在回复里把链接做成 Markdown 超链接给用户**（用返回的 `urlMarkdown`，
+     例如 `[打开 CADViewer 界面](http://127.0.0.1:3717/?open=...)`）—— 这样在 agent
+     界面里**点一下就能打开**，不要只贴一串裸 URL。
      这是本机链接：**只有服务在跑的时候能打开**；端口默认固定 `3717`，
      下次 `serve` / `open` 起来后同一个链接又能用。
 4. **总结给用户**：用 `digest`（需要更多细节再跑 `summary` / `blocks` / `text`）：
