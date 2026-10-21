@@ -1128,7 +1128,7 @@ async function cmdOpen(ctx, srcAbs, opts) {
       warnings: summary.warnings,
     },
     next: [
-      "把链接以 **Markdown 超链接**给用户（界面里可点开）：[打开 CADViewer 界面](url) —— 不要只贴裸 URL",
+      "把链接以 **Markdown 超链接**给用户（界面里可点开）：[打开 CADViewer 界面](url) —— 不要只贴裸 URL；**必须写在一行**，URL 中间换行会失效（也可用自动链接 <url>）",
       "同时用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
       "用 digest 把图里的基本情况讲清楚，然后问用户接下来做什么",
       "把可选操作列成选项让用户选，不要擅自导出：PDF（A3 打印）/ PNG（发人看）/ DXF（给别人编辑）/ JSON（存档）",

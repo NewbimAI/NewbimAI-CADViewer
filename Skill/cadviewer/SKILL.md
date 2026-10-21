@@ -55,6 +55,8 @@ node Skill/cadviewer/scripts/cad.mjs open "<图纸.dwg|dxf>"
    - **同时在回复里把链接做成 Markdown 超链接给用户**（用返回的 `urlMarkdown`，
      例如 `[打开 CADViewer 界面](http://127.0.0.1:3717/?open=...)`）—— 这样在 agent
      界面里**点一下就能打开**，不要只贴一串裸 URL。
+     ⚠️ **链接必须写在一行**：URL 里换行会把它从链接降级成普通文字，点了没反应。
+     两种写法都行：行内链接 `[打开 CADViewer 界面](url)`，或自动链接 `<url>`。
      这是本机链接：**只有服务在跑的时候能打开**；端口默认固定 `3717`，
      下次 `serve` / `open` 起来后同一个链接又能用。
 4. **总结给用户**：用 `digest`（需要更多细节再跑 `summary` / `blocks` / `text`）：
