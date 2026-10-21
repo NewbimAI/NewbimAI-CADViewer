@@ -180,6 +180,7 @@ node cad.mjs doctor
 # 【主流程】收到图纸：转 DXF + 起服务 + 返回可直接打开的链接与概要
 node cad.mjs open "<图纸目录>\示例图纸.dwg"
 # → {"ok":true,"url":"http://127.0.0.1:3717/?open=...","digest":{...},"next":[...]}
+#   把 url 也发给用户（本机链接，服务在跑时才能打开）；不要默认导出 PNG/PDF
 
 # 用完关掉（后台静默启动，空闲 30 分钟也会自动退出）
 node cad.mjs close

@@ -1086,8 +1086,10 @@ async function cmdClose(ctx, opts) {
  *   ② 确保本机服务在跑
  *   ③ 返回一个**可以直接在浏览器打开**的地址（带 ?open=），以及摘要
  *
- * 给 agent 的约定：拿到 url 就用内置浏览器打开（和普通网页一致），
- * 摘要可以直接用来跟用户讲图里有什么，再问下一步要做什么（导出 PDF 等）。
+ * 给 agent 的约定：
+ *   · 拿到 url 用内置浏览器打开（和普通网页一致），**同时把 url 原文贴给用户**；
+ *   · 摘要用来讲图里有什么；
+ *   · **不要擅自导出** PNG/PDF，把导出列成选项让用户选。
  */
 async function cmdOpen(ctx, srcAbs, opts) {
   const dxf = await ensureDxf(ctx, srcAbs);
@@ -1103,6 +1105,7 @@ async function cmdOpen(ctx, srcAbs, opts) {
   return {
     ok: true,
     url: primary,
+    urlNote: "本机链接：服务在跑时才能打开。请把 url 一起发给用户，方便他下次直接点开。",
     localUrl: local,
     host: served.host,
     lanUrls: served.lanUrls || [],
@@ -1124,10 +1127,11 @@ async function cmdOpen(ctx, srcAbs, opts) {
       warnings: summary.warnings,
     },
     next: [
-      "用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
-      "把 digest 里的数字讲给用户，并问接下来做什么",
-      "可提示：导出 PDF（A3 打印）、PNG（发人看）、DXF（给别人编辑）、JSON（存档）",
-      "用户看完了就跑 cad.mjs close（服务空闲 30 分钟也会自己退出）",
+      "把 url 原文贴给用户（本机链接：服务在跑的时候才能打开；端口默认固定 3717，下次服务起来后同一个链接还能用）",
+      "同时用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
+      "用 digest 把图里的基本情况讲清楚，然后问用户接下来做什么",
+      "把可选操作列成选项让用户选，不要擅自导出：PDF（A3 打印）/ PNG（发人看）/ DXF（给别人编辑）/ JSON（存档）",
+      "用户明确选了再执行对应的 export；全部看完后跑 cad.mjs close",
     ],
   };
 }
