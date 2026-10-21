@@ -168,13 +168,37 @@ else {
 
 Write-Host ""
 Write-Host "  $okCount linked, $skipCount skipped" -ForegroundColor Cyan
+
+# 装完直接自检（只读本地文件，不碰任何图纸）——省掉「再跑一条命令」这一步
+$cliPath = Join-Path $source "scripts\cad.mjs"
+if (Test-Path $cliPath) {
+    $tmpOut = Join-Path $env:TEMP ("cadviewer-doctor-" + [Guid]::NewGuid().ToString("N") + ".json")
+    $tmpErr = $tmpOut + ".err"
+    try {
+        $nodeExe = (Get-Command node -ErrorAction Stop).Source
+        Start-Process -FilePath $nodeExe -ArgumentList @("`"$cliPath`"", "doctor") -NoNewWindow -Wait `
+            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr | Out-Null
+        $obj = (Get-Content -Raw -Encoding UTF8 $tmpOut) | ConvertFrom-Json
+        $deg = ""
+        if ($obj.degraded -and @($obj.degraded).Count -gt 0) { $deg = " (degraded: " + (@($obj.degraded) -join ", ") + ")" }
+        if ($obj.ok) {
+            Write-Host ("  doctor: ok" + $deg) -ForegroundColor Green
+        }
+        else {
+            Write-Host ("  doctor: NOT ok - run manually: node `"$cliPath`" doctor") -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host ("  doctor: skipped - run manually: node `"$cliPath`" doctor") -ForegroundColor Yellow
+    }
+    finally {
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host ""
-Write-Host "Next (the only step needed):" -ForegroundColor Cyan
-Write-Host "  node `"$source\scripts\cad.mjs`" doctor"
-Write-Host ""
-Write-Host "Do NOT run npm install / vite build - web/dist is already in the repo." -ForegroundColor DarkGray
-Write-Host "Do NOT hunt for a sample drawing to verify - doctor is enough." -ForegroundColor DarkGray
-Write-Host "cadcraft (DWG) is installed above; the local service starts on demand only." -ForegroundColor DarkGray
+Write-Host "Nothing else to do. Do NOT verify with a drawing; do NOT run npm install / vite build." -ForegroundColor DarkGray
+Write-Host "The local service starts on demand only (open / serve)." -ForegroundColor DarkGray
 Write-Host ""
 
 if ($skipCount -gt 0 -and $okCount -eq 0) { exit 2 }

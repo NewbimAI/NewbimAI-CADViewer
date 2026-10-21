@@ -92,24 +92,28 @@ node Skill/cadviewer/scripts/cad.mjs close
 
 ## Setup (once)
 
-**只需要 Node.js 20+；其余（含 DWG 转换器）由安装脚本一次装好。**
-
-- ✅ **安装阶段把该装的都装好**（cadcraft 由 `install.ps1` / `install.sh` 自动下载解压），
-  之后不会再缺东西。
-- ✅ **但不要跑图纸验证**：装完跑一次 `doctor` 就结束，**不要**为了“验证”去搜索/下载 DWG 样本。
-- ✅ **仓库自带构建好的前端 `web/dist`** —— 不要 `npm install`、不要 `vite build`。
-- ✅ **服务按需启动**：`open` / `serve` 才起服务，且是后台静默启动；`close` 或用完空闲 30 分钟自动退出。
+**一条命令装完，装完就结束——不需要再做任何验证。**
 
 ```bash
-# 1) 安装（注册 + 下载转换器 + 自检），一步到底
-#    Windows:     powershell -ExecutionPolicy Bypass -File Skill\install.ps1
-#    macOS/Linux: bash Skill/install.sh
-
-# 2) 确认（可选，安装脚本最后也会跑）
-node Skill/cadviewer/scripts/cad.mjs doctor
+# Windows
+powershell -ExecutionPolicy Bypass -File Skill\install.ps1
+# macOS / Linux
+bash Skill/install.sh
 ```
 
-`ok:true` 就是装好了。`degraded` 里只剩 `fonts` 也算正常（字体只给界面渲染用，CLI 不读）。
+脚本一次做完（幂等，可反复跑）：
+
+1. 把 `Skill/cadviewer` 链接到 agent 的 skills 目录（OpenCode 总是；Claude Code / Cursor 存在则一并装）
+2. 下载并解压 cadcraft（DWG 转换器，约 57MB；已存在则跳过）
+3. 跑一次 `doctor` 并打印结果（`doctor: ok` / `doctor: NOT ok`）
+
+**装完不要再做下面这些**（全是多余动作，会拖慢安装）：
+
+- ❌ 找 / 下载图纸来“验证”——`doctor` 已经自检过；**不要**为验证去搜本机 DWG
+- ❌ `npm install` / `vite build`——仓库自带 `web/dist`
+- ❌ 手动起服务——`open` / `serve` 按需静默启动
+
+`doctor: ok` 且 `degraded: ["fonts"]` 属正常（字体只给界面渲染用，CLI 不读）。
 
 ### 转换器 cadcraft（安装时一次装好）
 

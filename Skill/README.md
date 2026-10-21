@@ -161,13 +161,14 @@ export CADVIEWER_ROOT=/path/to/cadviewer
 # 想长期生效，写进 ~/.bashrc 或 ~/.zshrc
 ```
 
-验证：
+安装脚本最后**已经自动跑过 `doctor`** 并打印了结果（`doctor: ok`）。想单独再确认时才手动跑：
 
 ```bash
 node "%USERPROFILE%\.config\opencode\skills\cadviewer\scripts\cad.mjs" doctor
 ```
 
 应看到 `"ok": true`，且 `project-root` 指向真实仓库、`cadcraft` 指向 `bin/cadcraft/**/cadcraft-cli.exe`。
+**不要**为了验证去找一张图纸跑——安装只要 `doctor` 通过就算完成。
 
 ---
 

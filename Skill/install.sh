@@ -122,13 +122,22 @@ fi
 
 echo ""
 echo "  $ok linked, $skip skipped"
+
+# 装完直接自检（只读本地文件，不碰任何图纸）
+CLI="$SOURCE/scripts/cad.mjs"
+if [ -f "$CLI" ] && command -v node >/dev/null 2>&1; then
+  out="$(node "$CLI" doctor 2>/dev/null || true)"
+  if printf '%s' "$out" | grep -q '"ok": true'; then
+    deg="$(printf '%s' "$out" | grep -o '"degraded": \[[^]]*\]' | head -1)"
+    echo "  doctor: ok ${deg:+($deg)}"
+  else
+    echo "  doctor: NOT ok - run manually: node \"$CLI\" doctor"
+  fi
+fi
+
 echo ""
-echo "Next (the only step needed):"
-echo "  node \"$SOURCE/scripts/cad.mjs\" doctor"
-echo ""
-echo "Do NOT run npm install / vite build - web/dist is already in the repo."
-echo "Do NOT hunt for a sample drawing to verify - doctor is enough."
-echo "cadcraft (DWG) is installed above; the local service starts on demand only."
+echo "Nothing else to do. Do NOT verify with a drawing; do NOT run npm install / vite build."
+echo "The local service starts on demand only (open / serve)."
 echo ""
 
 if [ "$skip" -gt 0 ] && [ "$ok" -eq 0 ]; then exit 2; fi
