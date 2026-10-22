@@ -609,6 +609,117 @@ async function cmdStats(ctx, srcAbs) {
   return { ...stats, tch, header: stats.header };
 }
 
+/**
+ * readout —— 一次拿到「能直接读懂」的全量数据。
+ *
+ * 为什么加这个：让 agent **读 JSON 而不是看截图**。
+ * 之前 agent 为了读图里的数据，会反复截图、放大、在画布上翻找文字，又慢又容易看错。
+ * 现在数据解析这一步一次做完，agent 直接读这份 JSON 就能把图讲清楚；
+ * 浏览器只在「需要看外观/排版」或「用户要自己看」时才用。
+ *
+ * 不起服务、不连浏览器，纯本地解析（DWG 会先转 DXF 并缓存）。
+ */
+async function cmdReadout(ctx, srcAbs, opts) {
+  const dxf = await ensureDxf(ctx, srcAbs);
+  const infoPromise = ctx.cli ? ctx.cli.infoJson(srcAbs) : Promise.resolve(null);
+  const [stats, info, textItems] = await Promise.all([
+    ctx.mod.scanDxf(dxf.dxfPath),
+    infoPromise,
+    scanTextFile(ctx, dxf.dxfPath),
+  ]);
+  const tch = ctx.mod.detectTch({ dxfPath: dxf.dxfPath, info });
+
+  const limit = opts.limit == null ? 300 : parseNonNegativeInt(opts.limit, "--limit");
+
+  // 图层：只列有实体的（与界面口径一致），按实体数降序
+  const layers = (stats.layers || [])
+    .filter((l) => l.entityCount > 0)
+    .sort((a, b) => (b.entityCount || 0) - (a.entityCount || 0))
+    .map((l) => ({
+      name: l.name,
+      entityCount: l.entityCount || 0,
+      colorHex: l.colorHex,
+      off: !!l.off,
+      frozen: !!l.frozen,
+    }));
+
+  // 块：只列本图真用到的（refCount 或 nestedRefCount > 0），按引用次数降序
+  const allBlocks = stats.blocks || [];
+  const blocks = allBlocks
+    .filter((b) => isUsedBlock(b))
+    .sort((a, b) => (b.refCount || 0) - (a.refCount || 0))
+    .map((b) => ({
+      name: b.name,
+      refCount: b.refCount || 0,
+      nestedRefCount: b.nestedRefCount || 0,
+      entityCount: b.entityCount || 0,
+      anonymousRefCount: b.anonymousRefCount || 0,
+    }));
+
+  // 文字：同一串字在图上常出现很多次 → 按内容聚合，给次数/所在层/一个位置
+  const byText = new Map();
+  for (const t of textItems) {
+    const s = String(t.text || "").trim();
+    if (!s) continue;
+    let e = byText.get(s);
+    if (!e) {
+      e = { text: s, count: 0, layers: new Set(), at: { x: t.x, y: t.y, h: t.h } };
+      byText.set(s, e);
+    }
+    e.count++;
+    if (t.layer) e.layers.add(t.layer);
+  }
+  const textIndex = [...byText.values()]
+    .sort((a, b) => b.count - a.count || String(b.text).length - String(a.text).length)
+    .map((e) => ({
+      text: e.text,
+      count: e.count,
+      layers: [...e.layers].slice(0, 4),
+      at: { x: Math.round(e.at.x), y: Math.round(e.at.y), h: e.at.h },
+    }));
+
+  return {
+    ok: true,
+    file: {
+      path: srcAbs,
+      format: path.extname(srcAbs).slice(1).toUpperCase(),
+      sizeBytes: fs.statSync(srcAbs).size,
+    },
+    dxf: { path: dxf.dxfPath, converted: !!dxf.converted, fromCache: !!dxf.fromCache },
+    summary: {
+      entities: (stats.entities && stats.entities.total) || 0,
+      byType: (stats.entities && stats.entities.byType) || {},
+      layers: { total: (stats.layers || []).length, nonEmpty: layers.length },
+      blocks: {
+        defined: allBlocks.length,
+        used: blocks.length,
+        unused: stats.unusedBlockDefCount != null ? stats.unusedBlockDefCount : allBlocks.length - blocks.length,
+        anonymousHidden: stats.anonymousHiddenCount || 0,
+      },
+      texts: { total: textItems.length, distinct: textIndex.length },
+    },
+    extents: stats.extents || null,
+    contentBox: stats.contentBox || null,
+    header: stats.header || null,
+    layers,
+    blocks,
+    texts: {
+      total: textItems.length,
+      distinct: textIndex.length,
+      items: textIndex.slice(0, limit),
+      truncated: textIndex.length > limit,
+    },
+    tch: { level: tch.level, evidence: (tch.evidence || []).slice(0, 6) },
+    warnings: stats.warnings || [],
+    howToRead: [
+      "数字以本 JSON 为准，不要从截图里数",
+      "texts.items 是去重后的文字（按出现次数降序），含所在图层与位置",
+      "blocks 只列本图真用到的块（refCount / nestedRefCount）",
+      "读数据不需要打开浏览器；只有要看外观/排版或用户要自己看时才开",
+    ],
+  };
+}
+
 async function cmdLayers(ctx, srcAbs, opts) {
   const { stats } = await loadStats(ctx, srcAbs);
   const rows = (stats.layers || [])
@@ -1129,9 +1240,10 @@ async function cmdOpen(ctx, srcAbs, opts) {
     },
     next: [
       "把链接以 **Markdown 超链接**给用户（界面里可点开）：[打开 CADViewer 界面](url) —— 不要只贴裸 URL；**必须写在一行**，URL 中间换行会失效（也可用自动链接 <url>）",
-      "同时用你的内置浏览器打开 url（界面与正常网页一致：缩放/平移、图层与图块面板、导出下拉）",
-      "用 digest 把图里的基本情况讲清楚，然后问用户接下来做什么",
-      "把可选操作列成选项让用户选，不要擅自导出：PDF（A3 打印）/ PNG（发人看）/ DXF（给别人编辑）/ JSON（存档）",
+      "读数据用 `cad.mjs readout <图纸>` 拿一份全量 JSON（实体/图层/块/文字/范围/天正）——**不要**靠截图、放大、在画布上翻找文字",
+      "浏览器默认不用开；只有用户想自己看、或要判断外观（排版/重叠/缺失）时打开一次，看完就停",
+      "用 JSON 里的数字把图讲清楚（数字以 JSON 为准，不要从截图里数），并问用户接下来做什么",
+      "把可选操作列成选项让用户选，不要擅自导出：PDF（A3 打印）/ PNG（发人看，**只导一张**）/ DXF（给别人编辑）/ JSON（存档）",
       "用户明确选了再执行对应的 export；全部看完后跑 cad.mjs close",
     ],
   };
@@ -1145,6 +1257,7 @@ const USAGE = {
     serve: "serve [--status] [--port N] [--foreground]（确保服务在跑；--foreground 前台跑，给会回收后台进程的环境）",
     close: "close [--port N]（关闭后台服务；空闲 30 分钟也会自动退出）",
     summary: "summary <file>",
+    readout: "readout <file> [--limit N]（一次拿到全部可读数据：图层/块/文字/范围/天正；读数据不用截图）",
     stats: "stats <file>",
     layers: "layers <file> [--all]",
     blocks: "blocks <file> [--min-ref N] [--limit N] [--all（含未使用的定义）]",
@@ -1211,6 +1324,9 @@ async function main() {
       break;
     case "stats":
       result = await cmdStats(ctx, srcAbs);
+      break;
+    case "readout":
+      result = await cmdReadout(ctx, srcAbs, opts);
       break;
     case "layers":
       result = await cmdLayers(ctx, srcAbs, opts);
