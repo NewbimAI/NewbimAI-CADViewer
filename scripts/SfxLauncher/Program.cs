@@ -8,7 +8,7 @@ namespace CadViewer
 {
     internal static class Program
     {
-        internal const string Version = "0.2.3";
+        internal const string Version = "0.2.4";
         internal const string AppFolder = "CADViewer-" + Version + "-win64";
 
         internal static string BaseDir

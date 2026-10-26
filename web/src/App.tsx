@@ -728,22 +728,12 @@ export default function App() {
                     : "cv-border cv-surface"
                 )}
               >
-                <div
-                  className={cn(
-                    "flex h-14 w-14 items-center justify-center rounded-xl ring-1 transition-colors",
-                    dragOver
-                      ? "bg-primary/20 ring-primary/40"
-                      : "cv-surface-strong cv-border"
-                  )}
-                >
-                  <Logo className="cv-text h-8 w-8 opacity-90" />
-                </div>
                 <div className="space-y-1.5">
                   <div className="cv-text text-base font-semibold tracking-tight">
                     {dragOver ? "松开以打开图纸" : "拖入 DWG / DXF 图纸"}
                   </div>
                   <div className="cv-text-muted text-sm leading-relaxed">
-                    或点击「打开图纸」选择文件，也可以把图纸直接拖进来
+                    点击「打开图纸」选择文件，也可以把图纸直接拖进来
                   </div>
                 </div>
                 <Button size="default" className="gap-2 shadow-xs" onClick={pickFile}>
