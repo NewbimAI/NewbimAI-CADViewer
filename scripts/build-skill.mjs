@@ -1,16 +1,20 @@
 /**
- * 生成「轻量 Skill 包」：只含 Skill 文档 + CLI 实际 import 的 4 个 server 模块。
+ * 生成「轻量 Skill 包」：Skill 文档 + CLI 实际 import 的 4 个 server 模块 + 服务端清单。
  *
  *   node scripts/build-skill.mjs
- *   → release/cadviewer-skill-<version>.zip   （约 60KB，解压约 153KB）
+ *   → release/cadviewer-skill-<version>.zip   （约 90KB，解压约 250KB）
  *
  * 为什么可以这么小：cad.mjs 只动态 import cadcraft.js / scanner.js / tch-detect.js /
  * svg-pdf.js，四个模块只依赖 Node 内置库，彼此不 import。web/、字体、前端构建产物
- * 全都用不到。
+ * 都不进包——**安装时由 install.ps1 / install.sh 自动下载补全**。
  *
- * 代价（必须在说明里写清）：
- *   · `serve`（起界面）不可用——它需要完整项目的 start.bat + web/dist；
- *   · DWG 转换仍需自己准备 bin/cadcraft/（约 57MB 下载，解压 127MB）。
+ * 装完为什么是完整功能：
+ *   安装脚本发现缺 server/index.js 或 web/dist/index.html 时，会从发布仓库取回
+ *   对应的 tag 归档（约 18MB），把 server/*.js 与 web/dist 复制进包内目录，于是
+ *   open（生成链接 + 起界面）、PNG/PDF 导出、图块文字展开全部可用。
+ *   package.json / package-lock.json 随包分发，serve 首次启动时自动 npm ci。
+ *
+ * 仍然需要联网（或事后补）：cadcraft 转换器（约 57MB，DWG 与 png/pdf 导出用）。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,7 +27,15 @@ const NAME = `cadviewer-skill-${ver}`;
 const STAGE = path.join(ROOT, "release", "skill", NAME);
 const ZIP = path.join(ROOT, "release", `${NAME}.zip`);
 
-const MODULES = ["cadcraft.js", "scanner.js", "tch-detect.js", "svg-pdf.js"];
+// CLI 直接 import 的模块 + 服务端清单（清单用于版本号与 npm ci）
+const MODULES = [
+  "cadcraft.js",
+  "scanner.js",
+  "tch-detect.js",
+  "svg-pdf.js",
+  "package.json",
+  "package-lock.json",
+];
 
 fs.rmSync(STAGE, { recursive: true, force: true });
 fs.rmSync(ZIP, { force: true });
@@ -35,37 +47,52 @@ for (const m of MODULES) {
 }
 
 fs.writeFileSync(
-  path.join(STAGE, "轻量版说明.txt"),
-  `CADViewer Skill ${ver}（轻量包）
+  path.join(STAGE, "使用说明.txt"),
+  `CADViewer Skill ${ver}（轻量包 · 安装时自动补全）
 
-这个包只包含 agent 用的命令行 Skill，以及它实际依赖的 4 个服务端模块
-（cadcraft.js / scanner.js / tch-detect.js / svg-pdf.js）。
+一、这个包为什么小
+  包内只有两样东西：agent 用的命令行 Skill（含 cad.mjs），
+  以及它实际 import 的 4 个服务端模块 + 服务端清单。
+  界面、服务端全量代码、DWG 转换器都不在包里，**安装时自动下载补回来**——
+  所以包只有几百 KB，可以上传到有 3MB 限制的 agent（WorkBuddy 等），
+  装完却是完整功能。
 
-能做什么（不需要浏览器、不需要前端）
-  summary / stats / layers / blocks / text / tch
-  export --to json | dxf        （DXF 输入时连 cadcraft 都不需要）
-  export --to dwg→dxf 等        （需要 bin/cadcraft/，见下）
+二、对方需要什么
+  · Windows 10/11 x64（macOS / Linux 只能做 DXF 只读）
+  · Node.js 20+：https://nodejs.org       ← 唯一需要自己装的东西
+  · 联网（安装时要下载组件）
 
-不能做什么
-  · serve（启动图形界面）：它依赖完整项目的 start.bat 与 web/dist，
-    轻量包里没有。要交互看图，请用完整版：
-    https://github.com/NewbimAI/NewbimAI-CADViewer/releases
+三、怎么装（一条命令，装完即止）
+  1) 解压到一个**固定位置**（建议 D:\\CADViewer；装完不能随便移动/删除，注册用的是目录联接）
+  2) 在该目录执行：
+       powershell -ExecutionPolicy Bypass -File Skill\\install.ps1
+     它会依次完成：
+       · 把 Skill 注册到 agent 的 skills 目录（OpenCode / Claude Code / Cursor）
+       · 下载并解压 cadcraft 转换器（约 57MB，DWG 用）
+       · 下载界面 + 服务端（约 18MB），补回 web/dist 与 server/*.js
+       · 跑 doctor 自检并打印结果
+     看到 doctor: ok 就装完了，**不需要再拿图纸验证**。
 
-怎么用（两步）
-  1) 需要 Node.js 20+（这是唯一的必需运行时；DXF 统计不再需要别的东西）
-  2) 注册到 agent —— 会自动识别 OpenCode / Claude Code / Cursor：
-       Windows    : powershell -ExecutionPolicy Bypass -File Skill\install.ps1
-       macOS/Linux: bash Skill/install.sh
-     装完不需要设置任何环境变量（CLI 从自身位置就能找到本包）。
+四、装完能做什么（完整功能）
+  · open：DWG→DXF → 起本地服务（后台静默，不弹窗）→ 返回可直接打开的链接
+  · serve：只确保服务在跑；close：立即停服（空闲 30 分钟也会自动退出）
+  · readout：一次拿全量 JSON（实体/图层/块/文字/范围/天正），读数据不用截图
+  · export --to dxf|json|pdf|png|svg：导出原始 DXF、数据、矢量 PDF、图片
+  · summary / stats / layers / blocks / text / tch：单点查询
 
-  不注册也能直接用（cwd 在哪都行，不需要 --root）：
-       node <本包>/Skill/cadviewer/scripts/cad.mjs summary 图纸.dxf
+五、常见问题
+  · 下载失败（公司网络/墙）：重跑一次安装脚本即可，已装好的部分会跳过；
+    也可把发布仓库的源码包下载到本地，用
+      powershell -File Skill\\install.ps1 -ComponentsUrl <本地 zip>
+    离线或不想补全时加 -SkipComponents（只剩统计与 JSON/DXF 导出）。
+  · 提示「找不到 Node」：装 Node.js 20+ 后重开终端。
+  · doctor 里 degraded 有 cadcraft / ui：说明那次下载没成功，重跑安装脚本。
+  · 端口被占用：cad.mjs 会自动挑空闲端口；也可 set PORT=3727。
+  · 换位置了：删除旧目录后重新解压 + 重新跑 install.ps1（-Force 可重指向）。
 
-  3) 开 DWG（可选）：从 https://github.com/storytold/cadcraft/releases 下载
-     cadcraft-<版本>-windows-x64-portable.zip，解压到 <本包>/bin/cadcraft/，
-     使 <本包>/bin/cadcraft/**/cadcraft-cli.exe 存在，再跑 doctor 确认。
-
-许可：AGPL-3.0-only（见仓库 LICENSE）；商业许可 nbimgpt@163.com
+六、许可
+  AGPL-3.0-only（见仓库 LICENSE）；商业许可 nbimgpt@163.com
+  第三方组件（含 CADCraft CLI，Apache-2.0 或 MIT）见仓库 THIRD-PARTY.md
 `,
   "utf8"
 );

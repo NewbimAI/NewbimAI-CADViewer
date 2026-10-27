@@ -120,15 +120,19 @@ bash Skill/install.sh
 
 1. 把 `Skill/cadviewer` 链接到 agent 的 skills 目录（OpenCode 总是；Claude Code / Cursor 存在则一并装）
 2. 下载并解压 cadcraft（DWG 转换器，约 57MB；已存在则跳过）
-3. 跑一次 `doctor` 并打印结果（`doctor: ok` / `doctor: NOT ok`）
+3. **补全界面与服务端**：小包（轻量分发版）只带 CLI 需要的模块，脚本会下载发布归档（约 18MB），
+   把 `web/dist` 与 `server/*.js` 补回来——补完即完整功能（`open` 出链接、`serve` 起界面、PNG/PDF 导出）
+4. 跑一次 `doctor` 并打印结果（`doctor: ok` / `doctor: NOT ok`）
 
 **装完不要再做下面这些**（全是多余动作，会拖慢安装）：
 
 - ❌ 找 / 下载图纸来“验证”——`doctor` 已经自检过；**不要**为验证去搜本机 DWG
-- ❌ `npm install` / `vite build`——仓库自带 `web/dist`
+- ❌ `npm install` / `vite build`——仓库自带 `web/dist`，小包由安装脚本补回
 - ❌ 手动起服务——`open` / `serve` 按需静默启动
 
-`doctor: ok` 且 `degraded: ["fonts"]` 属正常（字体只给界面渲染用，CLI 不读）。
+`doctor: ok` 且没有 `degraded` 就是最完整的状态；若 `degraded` 里有 `cadcraft` 或 `ui`，
+说明那一次下载失败，重跑安装脚本即可（已装好的部分会跳过）。`degraded: ["fonts"]` 也无害
+（字体只给界面渲染用，CLI 不读）。
 
 ### 转换器 cadcraft（安装时一次装好）
 

@@ -32,6 +32,10 @@ Skill/
 
 > **只需要 Node.js 20+。** 仓库里已带**构建好的前端 `web/dist`**——不要 `npm install`、
 > 不要 `vite build`（那是几分钟的浪费），clone 下来直接能用。
+>
+> **轻量分发包**（`release/cadviewer-skill-<ver>.zip`，85KB，给有 3MB 上传限制的 agent 用）
+> 里没有 `web/dist` 与 `server/*.js`：`install.ps1` / `install.sh` 会在安装时自动下载
+> 发布归档并补回，装完同样是完整功能。
 
 这个 Skill 本身只是**薄壳**，运行时依赖原仓库里的两样东西：
 
@@ -90,6 +94,8 @@ bash Skill/install.sh
 - 目标已存在但不是链接（旧副本）→ 默认跳过；加 `-Force`（bash 用 `--force`）会删掉它再建链接。
 - 已注册但指向别处 → 同样用 `-Force` 重新指向。
 - 只想装到指定目录：`-SkillsDir <目录>`（bash 用 `--skills-dir <目录>`）。
+- 不下载界面/服务端（只要 CLI）：`-SkipComponents`（bash 用 `--skip-components`）。
+- 从本地归档补组件（离线/内网）：`-ComponentsUrl <zip>`（bash 用 `COMPONENTS_URL=<zip>`）。
 
 下面是手动方式，效果相同，按需取用。
 
@@ -226,24 +232,36 @@ node cad.mjs export "<图纸目录>\a.dwg" --to json --out stats.json
 
 ---
 
-## 轻量包（59 KB，给别的 agent / 容器用）
+## 轻量分发包（85 KB，给别的 agent / 上传受限的平台上用）
 
 ```bash
 node scripts/build-skill.mjs      # → release/cadviewer-skill-<version>.zip
 ```
 
-GitHub Release 里也有同名资产，可以直接下。
+包里只有 `Skill/`（含 `cad.mjs`）＋ CLI 实际 `import` 的 4 个模块
+（`cadcraft.js` `scanner.js` `tch-detect.js` `svg-pdf.js`）＋ `server/package*.json`。
+解压 **217 KB**、压缩 **85 KB**——不含 `web/`、字体、前端产物、转换器。
 
-包里只有 `Skill/` + CLI 实际 `import` 的 4 个模块（`cadcraft.js` `scanner.js` `tch-detect.js` `svg-pdf.js`），
-解压 **137 KB**、压缩 **59 KB**——不含 `web/`、字体、前端产物。
+**装完就是完整功能**，因为 `install.ps1` / `install.sh` 会补两次下载：
 
-- ✅ 能用：`summary` `stats` `layers` `blocks` `text` `tch`、`export --to json|dxf`
-- ❌ 不能用：`serve`（起界面需要完整项目的 `start.bat` + `web/dist`）
-- DWG 仍需自己放 `bin/cadcraft/`；`doctor` 会把缺 cadcraft / 缺字体列进 `degraded`，不影响 DXF
+| 步骤 | 内容 | 大小 | 补完之后 |
+|---|---|---|---|
+| cadcraft | DWG 转换器 | ~57MB | DWG 打开、`svg\|pdf\|png` 导出 |
+| components | `web/dist` + `server/*.js` | ~18MB | `open` 出链接、`serve` 起界面、图块文字展开 |
+
+也就是说 `open` / `serve` / 四类导出**全部可用**，与直接 clone 仓库等价。
+
+- 下载失败只告警，不阻塞：`summary` `stats` `layers` `blocks` `text` `tch`
+  与 `export --to json|dxf` 只要有 `server/*.js` 就能跑；`doctor` 会把缺失项列进 `degraded`
+- 离线 / 内网：把仓库源码 zip 下到本地，用
+  `powershell -File Skill\install.ps1 -ComponentsUrl <本地 zip>`（bash 用 `COMPONENTS_URL=<zip>`）
+- 只想要 CLI、不要界面：`-SkipComponents`（bash 用 `--skip-components`）
+- 版本取自包内 `server/package.json`，按 `v<version>` 标签取归档；取不到就退回 `main` 分支
 - 用法：`node <包>/Skill/cadviewer/scripts/cad.mjs --root <包> summary 图纸.dxf`
 
-> 为什么四个模块就够：它们只依赖 Node 内置库，彼此不 import；`block-text.js` 只有
-> `dxf-web.js`（服务端渲染预处理）用，CLI 不需要。
+> 为什么四个模块就够 CLI：它们只依赖 Node 内置库，彼此不 import；`block-text.js`
+> 只有 `dxf-web.js`（服务端渲染预处理）用，CLI 不需要——但界面导出需要，所以由
+> components 步骤补回。
 
 ---
 

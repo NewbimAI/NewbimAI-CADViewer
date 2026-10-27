@@ -547,18 +547,29 @@ async function cmdDoctor(ctx) {
 
   let fontsOk = false;
   let fontsDetail = "";
-  try {
-    const fontDir = path.join(ctx.root, "web", "public", "fonts");
-    const fonts = fs
-      .readdirSync(fontDir)
-      .filter((f) => /\.(ttf|otf|ttc)$/i.test(f));
-    fontsOk = fonts.length > 0;
-    fontsDetail =
-      fonts.length > 0
-        ? `${fontDir}: ${fonts.join(", ")}`
-        : `${fontDir} 下没有字体文件`;
-  } catch (e) {
-    fontsDetail = `字体目录不可读: ${e.message}`;
+  // 字体可能在 web/public/fonts（仓库），也可能只在 web/dist/fonts（构建产物 / 安装时补回的界面）
+  const fontDirs = [
+    path.join(ctx.root, "web", "public", "fonts"),
+    path.join(ctx.root, "web", "dist", "fonts"),
+  ];
+  for (const fontDir of fontDirs) {
+    try {
+      const fonts = fs
+        .readdirSync(fontDir)
+        .filter((f) => /\.(ttf|otf|ttc)$/i.test(f));
+      if (fonts.length > 0) {
+        fontsOk = true;
+        fontsDetail = `${fontDir}: ${fonts.join(", ")}`;
+        break;
+      }
+      if (!fontsDetail) {
+        fontsDetail = `${fontDir} 下没有字体文件`;
+      }
+    } catch (e) {
+      if (!fontsDetail) {
+        fontsDetail = `字体目录不可读: ${e.message}`;
+      }
+    }
   }
   // 可选：字体只给界面渲染用，CLI 完全不读它（轻量包里没有 web/ 是正常的）
   checks.push({
@@ -566,6 +577,23 @@ async function cmdDoctor(ctx) {
     required: false,
     ok: fontsOk,
     detail: fontsOk ? fontsDetail : fontsDetail + "（只影响界面，CLI 不需要）",
+  });
+
+  // 可选：界面与服务端入口。轻量包安装时会自动补回；缺它们只是 open/serve 不可用。
+  const uiEntry = path.join(ctx.root, "server", "index.js");
+  const uiIndex = path.join(ctx.root, "web", "dist", "index.html");
+  const uiMissing = [];
+  if (!fs.existsSync(uiEntry)) uiMissing.push("server/index.js");
+  if (!fs.existsSync(uiIndex)) uiMissing.push("web/dist/index.html");
+  const uiOk = uiMissing.length === 0;
+  checks.push({
+    check: "ui",
+    required: false,
+    ok: uiOk,
+    detail: uiOk
+      ? `open/serve 可用（${uiIndex}）`
+      : `缺少界面组件（${uiMissing.join("、")}）：open/serve 不可用，统计与 JSON/DXF 导出不受影响；` +
+        `重新运行 install.ps1 / install.sh 会自动补全`,
   });
 
   let cacheOk = false;

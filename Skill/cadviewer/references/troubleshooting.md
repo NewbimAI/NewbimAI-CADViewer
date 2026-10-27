@@ -6,14 +6,15 @@
 node Skill/cadviewer/scripts/cad.mjs doctor
 ```
 
-输出 5 项 `{check, ok, detail}` 与总 `ok`：
+输出 6 项 `{check, ok, detail}` 与总 `ok`：
 
 | check | 失败时看什么 |
 |---|---|
 | `node` | Node 版本（项目要求 20+） |
 | `project-root` | 项目根是否找对 |
 | `cadcraft` | `bin/cadcraft/**/cadcraft-cli.exe` 是否存在、能否 `--version` |
-| `fonts` | `web/public/fonts/` 是否至少有一个字体 |
+| `fonts` | `web/public/fonts/` 或 `web/dist/fonts/` 是否至少有一个字体 |
+| `ui` | `server/index.js` 与 `web/dist/index.html`（`open` / `serve` 用；安装脚本会自动补） |
 | `cache` | `server/cache/skill/` 是否可写 |
 
 ---
@@ -252,10 +253,13 @@ node --check Skill/cadviewer/scripts/cad.mjs
 
 | degraded 里有 | 含义 | 影响 |
 |---|---|---|
-| `cadcraft` | 没放 `bin/cadcraft/` | DWG 转换与 `svg\|pdf\|png` 导出不可用；DXF 统计/导出照常 |
-| `fonts` | 没有 `web/public/fonts/`（轻量包里必然没有） | 只影响界面文字渲染；**CLI 完全不读字体** |
+| `cadcraft` | 没放 `bin/cadcraft/`（安装时下载失败） | DWG 转换与 `svg\|pdf\|png` 导出不可用；DXF 统计/导出照常 |
+| `ui` | 缺 `server/index.js` 或 `web/dist/index.html`（安装时下载失败） | `open` / `serve` 不可用；统计与 JSON/DXF 导出照常 |
+| `fonts` | `web/public/fonts/` 与 `web/dist/fonts/` 都没有字体 | 只影响界面文字渲染；**CLI 完全不读字体** |
 
-所以 `ok:true` + `degraded:["cadcraft","fonts"]` = "DXF 全能用，DWG/界面相关能力缺"。
+所以 `ok:true` + `degraded:["cadcraft","ui"]` = "DXF 全能用，DWG 与界面相关能力缺"。
+两种情况都是那一次下载没成功，**重跑 `install.ps1` / `install.sh`** 即可（已装好的部分会跳过）；
+离线时可把仓库源码 zip 下到本地，用 `-ComponentsUrl <zip>` 补。
 
 ## 14. 别的机器 / 别的 agent 打不开 `127.0.0.1:3717`
 
