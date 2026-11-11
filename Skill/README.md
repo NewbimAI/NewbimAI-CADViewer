@@ -3,19 +3,21 @@
 给 agent 用的 CAD 工具：读 DWG/DXF、统计图元、**图纸对比**、**测量**、**自定义对象解析（user-defined object）**、导出 DXF/SVG/PDF/PNG/JSON。
 所有数字都来自产品自己的解析链路（`server/scanner.js`、对比引擎），因此与界面看到的口径一致。
 
-唯一入口：
+唯一入口（在仓库里；解压后的 skill 包里把 `Skill/NewbimAI-CADViewer-Skill/` 换成包根目录即可）：
 
 ```bash
 node Skill/NewbimAI-CADViewer-Skill/scripts/cad.mjs <命令> [参数]
+# skill 包内（SKILL.md 就在当前目录）：
+node scripts/cad.mjs <命令> [参数]
 ```
 
-- 模型读的说明：`NewbimAI-CADViewer-Skill/SKILL.md`（薄，≤130 行）
-- 机器可读清单：`NewbimAI-CADViewer-Skill/skill.json`（名称/版本/命令/依赖/最低 App 版本）
-- 人读的细节：`NewbimAI-CADViewer-Skill/references/`（`cli` `compare` `measure` `udo` `answering` `api` `troubleshooting`）
+- 模型读的说明：`SKILL.md`（薄，≤130 行；仓库内位于 `Skill/NewbimAI-CADViewer-Skill/SKILL.md`）
+- 机器可读清单：`skill.json`（名称/版本/命令/依赖/最低 App 版本）
+- 人读的细节：`references/`（`cli` `compare` `measure` `udo` `answering` `api` `troubleshooting`）
 
 ---
 
-## 目录
+## 目录（仓库）
 
 ```text
 Skill/
@@ -34,6 +36,23 @@ Skill/
     │       └── udo.mjs                ← 自定义对象判定 + 解析覆盖摘要
     └── references/                    ← cli / compare / measure / udo / answering / api / troubleshooting
 ```
+
+## 目录（zip 解压后：第一层就是 skill 目录本身）
+
+agent 平台（Claude Code / opencode 等）要求 `SKILL.md` 就在 zip 第一层目录里，
+所以打包时把 `Skill/NewbimAI-CADViewer-Skill/` 的内容和运行时组件**平铺到同一层**：
+
+```text
+NewbimAI-CADViewer-Skill/        ← zip 第一层
+├── SKILL.md  skill.json  README.md
+├── install.ps1  install.cmd  install.sh  INSTALL.txt
+├── scripts/  references/
+├── server/                      ← CLI 直接 import 的服务端模块
+├── shared/geometry/
+└── （完整包另有 web/dist/ bin/cadcraft/ bin/udo-cli/ licenses/ data/ LICENSE THIRD-PARTY.md start.bat）
+```
+
+`cad.mjs` 从脚本目录向上找 `server/scanner.js`，找到即把它当项目根——所以平铺布局可直接工作。
 
 ---
 
@@ -58,18 +77,23 @@ Skill/
 ## 安装
 
 ```bat
-:: Windows（在解压后的目录里）
+:: Windows（在解压后的 NewbimAI-CADViewer-Skill 目录里）
+powershell -ExecutionPolicy Bypass -File install.ps1
+:: 或直接双击 install.cmd
+
+:: 仓库里（Skill\install.ps1 会自己判断布局）
 powershell -ExecutionPolicy Bypass -File Skill\install.ps1
 ```
 
 ```bash
 # macOS / Linux
-bash Skill/install.sh
+bash install.sh          # 解压后的 skill 包目录里
+bash Skill/install.sh    # 仓库里
 ```
 
 脚本做四件事（幂等，可反复跑）：
 
-1. 把 `Skill/NewbimAI-CADViewer-Skill` 以**目录联接/软链接**注册到 agent 的 skills 目录
+1. 把 skill 目录以**目录联接/软链接**注册到 agent 的 skills 目录
    （OpenCode `~/.config/opencode/skills` 总是装；检测到 Claude Code / Cursor 也一并装）；
 2. 缺 cadcraft 时下载并解压（删除上游 GUI 主程序，只留 CLI）；
 3. 缺界面/服务端时按 **`skill.json` 的版本**（源码树回退 `server/package.json`）取 `v<version>` 归档补全；
@@ -79,7 +103,7 @@ bash Skill/install.sh
 常用开关：`-Force` / `--force`（重指向）、`-SkillsDir` / `--skills-dir`、
 `-SkipComponents` / `--skip-components`（只留 CLI）、`-ComponentsUrl <zip>` / `COMPONENTS_URL=<zip>`（离线补组件）。
 
-装完**不需要**任何环境变量。手动方式：把 `Skill/NewbimAI-CADViewer-Skill` 整个目录复制或软链接到
+装完**不需要**任何环境变量。手动方式：把**含 `SKILL.md` 的那个目录**整个复制或软链接到
 `<skills>/NewbimAI-CADViewer-Skill`（不要只复制 `SKILL.md`）。
 
 `CADVIEWER_ROOT` 只在“把 Skill 复制到仓库外、且没有 `server/` 同级目录”时才需要：
@@ -112,37 +136,44 @@ node scripts/build-skill.mjs            # 轻量包
 node scripts/build-skill-full.mjs       # 完整包
 node scripts/check-skill.mjs --self-test                 # 校验源码树 + 命令层单测
 node scripts/check-skill.mjs --package <stage 目录>      # 校验打包产物（含闭源边界/许可附件）
+node scripts/check-skill.mjs --zip release/xxx.zip --zip release/yyy.zip
+                                        # 校验 zip 第一层必须是 NewbimAI-CADViewer-Skill/ 且有 SKILL.md
 ```
 
 输出默认在 `release/`；用环境变量 `CADVIEWER_RELEASE_DIR=<临时目录>` 可完全不污染仓库。
 两个包都由 `scripts/skill-build-lib.mjs` 生成：版本注入、模块清单（读 `skill.json`）、
-闭源边界断言、许可附件校验、压缩与体积报告都是同一套。
+闭源边界断言、许可附件校验、**zip 第一层布局断言**、压缩与体积报告都是同一套。
+
+zip 内的第一层目录名固定为 `NewbimAI-CADViewer-Skill/`（不是 `...-0.3.0/`，也不是
+`Skill/NewbimAI-CADViewer-Skill/`）：包名/版本只在 zip 文件名上体现。
 
 ### 体积构成（0.3.0 实测，未压缩 / 压缩）
 
-**轻量包** `NewbimAI-CADViewer-Skill-0.3.0.zip`
+**轻量包** `NewbimAI-CADViewer-Skill-0.3.0.zip`（解压后第一层 = `NewbimAI-CADViewer-Skill/`）
 
 | 组成 | 大小 |
 |---|---:|
-| `Skill/`（安装脚本 + README + SKILL.md + skill.json + scripts + references） | 171 KB |
-| `server/`（5 个模块 + package.json/lock） | 219 KB |
-| `使用说明.txt` | 2 KB |
-| **解压合计** | **约 392 KB** |
-| **zip** | **153 KB** |
+| `SKILL.md` + `skill.json` + `scripts/` + `references/` + `README.md` + 安装脚本 | 182 KB |
+| `server/`（5 个模块 + package.json/lock） | 218 KB |
+| `shared/geometry/` | 101 KB |
+| `INSTALL.txt` | 3 KB |
+| **解压合计** | **约 0.5 MB** |
+| **zip** | **约 0.18 MB** |
 
-**完整包** `NewbimAI-CADViewer-Skill-full-0.3.0.zip`
+**完整包** `NewbimAI-CADViewer-Skill-full-0.3.0.zip`（同一层里再加运行时组件）
 
 | 组成 | 大小 |
 |---|---:|
-| `Skill/`（安装脚本 + README + Skill） | 171 KB |
-| `server/`（全量） | 758 KB |
-| `web/dist`（其中字体 25.7 MB） | 28.9 MB |
+| `SKILL.md` + `scripts/` + `references/` + 安装脚本 + 许可声明 | 182 KB |
+| `server/`（全量） | 757 KB |
+| `shared/geometry/` | 101 KB |
+| `web/dist`（其中字体 11.1 MB） | 14.3 MB |
 | `bin/cadcraft`（仅 CLI） | 50.9 MB |
 | `bin/udo-cli`（解析组件） | 7.4 MB |
 | `licenses/`（MPL-2.0 等附件） | 37 KB |
-| `LICENSE` + `THIRD-PARTY.md` | 45 KB |
-| **解压合计** | **约 88.1 MB** |
-| **zip** | **43.3 MB** |
+| `LICENSE` + `THIRD-PARTY.md` + `start.bat` | 46 KB |
+| **解压合计** | **约 73.6 MB** |
+| **zip** | **约 34.9 MB** |
 
 轻量包装完还要联网两次：cadcraft（~57MB）+ 组件（~18MB）；完整包离线可用，且自带自定义对象解析。
 

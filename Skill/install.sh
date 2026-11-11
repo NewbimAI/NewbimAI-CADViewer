@@ -1,27 +1,33 @@
 #!/usr/bin/env bash
 # NewbimAI CADViewer Skill installer (macOS / Linux)
 #
-# Symlinks Skill/NewbimAI-CADViewer-Skill into the skills folder(s) your agent reads.
+# Symlinks the Skill directory into the skills folder(s) your agent reads.
 # After installing, no CADVIEWER_ROOT is needed: the CLI finds the project root
 # by walking up from its own script path.
+#
+# Supported layouts (auto-detected from where this script sits):
+#   - skill package:  <pkg>/SKILL.md + <pkg>/scripts/   (zip 第一层就是 skill 目录)
+#   - repo:           <root>/Skill/NewbimAI-CADViewer-Skill + <root>/Skill/install.sh
 #
 # Lightweight bundle: it only carries the Skill + the server modules the CLI imports
 # (small enough for agents with a 3MB upload limit). The rest of the product - built
 # interface (web/dist), server entry points (server/*.js), export pipeline - is fetched
 # here from the release archive, so a fresh install ends up with the full feature set.
 #
-# The closed-source custom-object parser (bin/udo-cli) is NOT downloaded here:
-# it ships only in the full package. Missing it degrades only `udo --coverage`.
+# The closed-source custom-object parser (bin/udo-cli) IS downloaded here by default
+# from the release asset udo-cli-<ver>-win64.zip (binaries + license attachments).
+# Pass --skip-udo to skip it; missing it degrades only `udo --coverage`.
 #
 # Version: bundled skill.json (injected from server/package.json at build time);
 # source tree falls back to server/package.json. Skill and App share one version.
 #
 # Usage:
-#   bash Skill/install.sh
-#   bash Skill/install.sh --force
-#   bash Skill/install.sh --skills-dir "$HOME/.config/opencode/skills"
-#   bash Skill/install.sh --skip-components
-#   COMPONENTS_URL=<zip> bash Skill/install.sh
+#   bash install.sh                 (inside a skill package: SKILL.md next to this file)
+#   bash Skill/install.sh           (in the repo)
+#   bash install.sh --force
+#   bash install.sh --skills-dir "$HOME/.config/opencode/skills"
+#   bash install.sh --skip-components
+#   COMPONENTS_URL=<zip> bash install.sh
 
 set -euo pipefail
 
@@ -29,21 +35,31 @@ SKILL_NAME="NewbimAI-CADViewer-Skill"
 
 FORCE=0
 SKIP_COMPONENTS=0
+SKIP_UDO=0
 SKILLS_DIR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --force|-f) FORCE=1; shift ;;
     --skip-components) SKIP_COMPONENTS=1; shift ;;
+    --skip-udo) SKIP_UDO=1; shift ;;
     --skills-dir) SKILLS_DIR="${2:?--skills-dir needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SOURCE="$SCRIPT_DIR/$SKILL_NAME"
-ROOT="$(dirname "$SCRIPT_DIR")"
+# 两种布局：脚本就在 skill 目录里（标准包） / 仓库里的 Skill/install.sh（旧布局）
+if [ -f "$SCRIPT_DIR/SKILL.md" ]; then
+  SOURCE="$SCRIPT_DIR"
+  ROOT="$SCRIPT_DIR"
+  PS_HINT="install.ps1"
+else
+  SOURCE="$SCRIPT_DIR/$SKILL_NAME"
+  ROOT="$(dirname "$SCRIPT_DIR")"
+  PS_HINT="Skill/install.ps1"
+fi
 
 SKILL_JSON="$SOURCE/skill.json"
 if [ ! -f "$SOURCE/SKILL.md" ]; then
@@ -123,7 +139,7 @@ done
 if [ "$copies" -gt 0 ]; then
   echo "  [WARN] $copies target(s) are copies, not symlinks (this filesystem/policy blocks symlinks)."
   echo "         A copy cannot find server/ by walking up. On Windows use instead:"
-  echo "         powershell -ExecutionPolicy Bypass -File Skill\\install.ps1"
+  echo "         powershell -ExecutionPolicy Bypass -File $PS_HINT"
 fi
 
 # ---- cadcraft（DWG 转换器）：一次性装好；装好后只有打开 DWG 时才会被调用 ----
@@ -147,7 +163,7 @@ else
     *)                    asset="" ;;
   esac
   if [ -z "$asset" ]; then
-    echo "  cadcraft: no official Linux build - install manually (see Skill/README.md)"
+    echo "  cadcraft: no official Linux build - install manually (see README.md)"
   else
     url="https://github.com/storytold/cadcraft/releases/download/v$CADCRAFT_VER/$asset"
     tmp="${TMPDIR:-/tmp}/$asset"
@@ -176,9 +192,31 @@ fi
 
 if [ -x "$ROOT/bin/udo-cli/udo-cli" ] || [ -f "$ROOT/bin/udo-cli/udo-cli.exe" ]; then
   echo "  udo-cli: present (custom objects: walls / openings / text / dimensions)"
+elif [ "$SKIP_UDO" = "1" ]; then
+  echo "  udo-cli: skipped (-SkipUdo) - custom-object parsing disabled"
 else
-  echo "  udo-cli: not found - custom-object parsing disabled (ships with the full package)"
-  echo "           everything else (stats / compare / export) still works"
+  UDO_VER="$(node -e "try{console.log(require('$ROOT/server/package.json').version||'')}catch(e){console.log('')}" 2>/dev/null)"
+  [ -n "$UDO_VER" ] || UDO_VER="0.3.0"
+  UDO_ZIP="udo-cli-$UDO_VER-win64.zip"
+  UDO_URL="https://github.com/NewbimAI/NewbimAI-CADViewer/releases/download/v$UDO_VER/$UDO_ZIP"
+  TMP_UDO="$(mktemp -d)"
+  echo "  udo-cli: downloading $UDO_ZIP (~2.7MB)..."
+  if curl -fL --retry 2 --max-time 600 -s -o "$TMP_UDO/p.zip" "$UDO_URL"; then
+    if unzip -q -o "$TMP_UDO/p.zip" -d "$TMP_UDO/x" 2>/dev/null; then
+      INNER="$(find "$TMP_UDO/x" -maxdepth 1 -mindepth 1 -type d | head -1)"
+      [ -n "$INNER" ] || INNER="$TMP_UDO/x"
+      mkdir -p "$ROOT/bin" "$ROOT/licenses"
+      cp -R "$INNER/bin/udo-cli" "$ROOT/bin/udo-cli"
+      [ -d "$INNER/licenses" ] && cp -R "$INNER/licenses/." "$ROOT/licenses/" 2>/dev/null
+      echo "  udo-cli: installed ($UDO_VER)"
+    else
+      echo "  udo-cli: [WARN] unzip failed (need unzip) - install manually: $UDO_URL -> $ROOT/bin/udo-cli/"
+    fi
+  else
+    echo "  udo-cli: [WARN] download failed - install manually: $UDO_URL -> $ROOT/bin/udo-cli/"
+    echo "           everything else (stats / compare / export) still works"
+  fi
+  rm -rf "$TMP_UDO"
 fi
 
 echo ""
@@ -323,7 +361,7 @@ fi
 echo ""
 echo "Nothing else to do. Do NOT verify with a drawing; do NOT run npm install / vite build."
 echo "The local service starts on demand only (open / serve / compare)."
-echo "Custom-object parsing (udo --coverage) needs bin/udo-cli, which ships in the full package."
+echo "Custom-object parsing (udo --coverage) uses bin/udo-cli (installed by default)."
 echo ""
 
 if [ "$skip" -gt 0 ] && [ "$ok" -eq 0 ]; then exit 2; fi

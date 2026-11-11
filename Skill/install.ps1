@@ -2,12 +2,14 @@
 <#
   NewbimAI CADViewer Skill installer (Windows)
 
-  Registers Skill\NewbimAI-CADViewer-Skill into the skills folder(s) your agent
-  actually reads, using a directory junction (no copy) so edits stay in sync.
+  Registers the Skill into the skills folder(s) your agent actually reads, using a
+  directory junction (no copy) so edits stay in sync.
 
-  Works for both layouts:
-    - full repo          <root>\Skill\NewbimAI-CADViewer-Skill
+  Works for all three layouts (detected from where this script sits):
+    - skill package  <pkg>\SKILL.md + <pkg>\scripts\        → script is inside the skill dir
+      (zip 内第一层就是 NewbimAI-CADViewer-Skill\；server\web\bin 都在同一层)
     - lightweight bundle <bundle>\Skill\NewbimAI-CADViewer-Skill  (bundle also has server\)
+    - full repo          <root>\Skill\NewbimAI-CADViewer-Skill
 
   Lightweight bundle: it only carries the Skill + the server modules the CLI imports
   (so it stays small enough to upload to agents with a 3MB limit). The rest of the
@@ -25,17 +27,20 @@
   After installing, no CADVIEWER_ROOT is needed: the CLI finds the project root
   by walking up from its own script path.
 
-  Usage:
+  Usage (inside a skill package - SKILL.md next to this file):
+    powershell -ExecutionPolicy Bypass -File install.ps1
+    powershell -ExecutionPolicy Bypass -File install.ps1 -Force
+    powershell -ExecutionPolicy Bypass -File install.ps1 -SkillsDir <dir>
+    powershell -ExecutionPolicy Bypass -File install.ps1 -SkipComponents
+    powershell -ExecutionPolicy Bypass -File install.ps1 -ComponentsUrl <zip>
+  Usage (in the repo):
     powershell -ExecutionPolicy Bypass -File Skill\install.ps1
-    powershell -ExecutionPolicy Bypass -File Skill\install.ps1 -Force
-    powershell -ExecutionPolicy Bypass -File Skill\install.ps1 -SkillsDir <dir>
-    powershell -ExecutionPolicy Bypass -File Skill\install.ps1 -SkipComponents
-    powershell -ExecutionPolicy Bypass -File Skill\install.ps1 -ComponentsUrl <zip>
 #>
 [CmdletBinding()]
 param(
     [switch]$Force,
     [switch]$SkipCadcraft,
+    [switch]$SkipUdo,
     [switch]$SkipComponents,
     [string]$ComponentsUrl,
     [string]$SkillsDir
@@ -46,8 +51,19 @@ $ErrorActionPreference = "Stop"
 $SKILL_NAME = "NewbimAI-CADViewer-Skill"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$source = Join-Path $scriptDir $SKILL_NAME
-$root = Split-Path -Parent $scriptDir
+# 两种布局都要能装：
+#   新（标准 agent skill 包，zip 第一层就是 skill 目录）：<pkg>\SKILL.md + <pkg>\scripts\…
+#        → source = 脚本所在目录；运行时组件（server\web\bin）也在这层，root 同 source
+#   旧（仓库 / 老包）：<pkg>\Skill\<SKILL_NAME>\ + <pkg>\Skill\install.ps1
+#        → source = <pkg>\Skill\<SKILL_NAME>；root = <pkg>
+if (Test-Path -LiteralPath (Join-Path $scriptDir "SKILL.md")) {
+    $source = $scriptDir
+    $root = $scriptDir
+}
+else {
+    $source = Join-Path $scriptDir $SKILL_NAME
+    $root = Split-Path -Parent $scriptDir
+}
 
 # skill.json：名称/版本/依赖模块的唯一机器可读来源（版本由构建脚本注入）
 $skillManifest = $null
@@ -208,9 +224,77 @@ $udoExe = Join-Path $root "bin\udo-cli\udo-cli.exe"
 if (Test-Path -LiteralPath $udoExe) {
     Write-Host "  udo-cli: present (custom objects: walls / openings / text / dimensions)" -ForegroundColor Cyan
 }
+elseif ($SkipUdo) {
+    Write-Host "  udo-cli: skipped (-SkipUdo) - custom-object parsing disabled" -ForegroundColor Yellow
+}
 else {
-    Write-Host "  udo-cli: not found - custom-object parsing disabled (ships with the full package)" -ForegroundColor Yellow
-    Write-Host "           everything else (stats / compare / export) still works" -ForegroundColor Yellow
+    # 解析组件是闭源二进制，不在 git 仓库里，只能从 Release 取（独立小包 2.7MB，含许可附件）
+    $udoVer = $null
+    if ($skillManifest -and $skillManifest.version) { $udoVer = [string]$skillManifest.version }
+    if (-not $udoVer) {
+        $pkgFile = Join-Path $root "server\package.json"
+        if (Test-Path -LiteralPath $pkgFile) {
+            try {
+                $p = Get-Content -Raw -Encoding UTF8 $pkgFile | ConvertFrom-Json
+                if ($p.version) { $udoVer = [string]$p.version }
+            }
+            catch { $udoVer = $null }
+        }
+    }
+    if (-not $udoVer) { $udoVer = "0.3.0" }
+    $udoZip = "udo-cli-$udoVer-win64.zip"
+    $udoUrl = "https://github.com/NewbimAI/NewbimAI-CADViewer/releases/download/v$udoVer/$udoZip"
+    $udoTmp = Join-Path $env:TEMP $udoZip
+    $udoDir = Join-Path $env:TEMP ("udo-cli-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        Write-Host "  udo-cli: downloading $udoZip (~2.7MB)..." -ForegroundColor Cyan
+        Write-Host "           $udoUrl" -ForegroundColor DarkGray
+        $ProgressPreference = "SilentlyContinue"
+        $ok = $false
+        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+            $oldPref = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & curl.exe -fL --retry 2 --max-time 600 -s -o "$udoTmp" "$udoUrl" 2>$null
+            $curlExit = $LASTEXITCODE
+            $ErrorActionPreference = $oldPref
+            if ($curlExit -eq 0 -and (Test-Path $udoTmp) -and ((Get-Item $udoTmp).Length -gt 1MB)) { $ok = $true }
+        }
+        if (-not $ok) {
+            Invoke-WebRequest -Uri $udoUrl -OutFile $udoTmp -UseBasicParsing
+            $ok = $true
+        }
+        if (-not (Test-Path -LiteralPath $udoTmp)) { throw "no file downloaded" }
+        Remove-Item -LiteralPath $udoDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $udoDir | Out-Null
+        Expand-Archive -LiteralPath $udoTmp -DestinationPath $udoDir -Force
+        $inner = Get-ChildItem -LiteralPath $udoDir -Directory | Select-Object -First 1
+        $srcBin = if ($inner) { Join-Path $inner.FullName "bin" } else { Join-Path $udoDir "bin" }
+        if (-not (Test-Path -LiteralPath (Join-Path $srcBin "udo-cli"))) { throw "archive has no bin/udo-cli" }
+        # 二进制 + licenses 一起落到 App 根：许可是分发闭源二进制的强制义务
+        New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
+        Copy-Item -LiteralPath (Join-Path $srcBin "udo-cli") -Destination (Join-Path $root "bin\udo-cli") -Recurse -Force
+        $licSrc = if ($inner) { Join-Path $inner.FullName "licenses" } else { Join-Path $udoDir "licenses" }
+        if (Test-Path -LiteralPath $licSrc) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root "licenses") | Out-Null
+            Copy-Item -Path (Join-Path $licSrc "*") -Destination (Join-Path $root "licenses") -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $udoExe) {
+            $uv = (& $udoExe version) 2>$null
+            Write-Host "  udo-cli: installed ($udoVer)" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  udo-cli: [WARN] extracted but udo-cli.exe not found" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host ("  udo-cli: [WARN] download failed: " + $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host "            install manually: $udoUrl -> $root\bin\udo-cli\" -ForegroundColor Yellow
+        Write-Host "            everything else (stats / compare / export) still works" -ForegroundColor Yellow
+    }
+    finally {
+        Remove-Item -LiteralPath $udoTmp -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $udoDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ---- components（界面 + 服务端入口 + 导出链路）----
@@ -387,7 +471,7 @@ if (Test-Path $cliPath) {
 Write-Host ""
 Write-Host "Nothing else to do. Do NOT verify with a drawing; do NOT run npm install / vite build." -ForegroundColor DarkGray
 Write-Host "The local service starts on demand only (open / serve / compare)." -ForegroundColor DarkGray
-Write-Host "Custom-object parsing (udo --coverage) needs bin\udo-cli, which ships in the full package." -ForegroundColor DarkGray
+Write-Host "Custom-object parsing (udo --coverage) uses bin\udo-cli (installed by default)." -ForegroundColor DarkGray
 Write-Host ""
 
 if ($skipCount -gt 0 -and $okCount -eq 0) { exit 2 }

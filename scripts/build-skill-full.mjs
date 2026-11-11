@@ -17,9 +17,11 @@ import path from "node:path";
 import {
   ROOT,
   SKILL_NAME,
+  SKILL_SRC,
   appVersion,
   printReport,
   zipStage,
+  writeRootInstaller,
   releaseDir,
   copySkillTree,
   copyServerModules,
@@ -27,11 +29,14 @@ import {
   copyClosedSourceBinary,
   dirSize,
   assertNoForbiddenSources,
+  assertSkillZipLayout,
 } from "./skill-build-lib.mjs";
 
 const ver = appVersion();
 const NAME = `${SKILL_NAME}-full-${ver}`;
-const STAGE = path.join(releaseDir(), "skill-full", NAME);
+// stage 目录名必须是 NewbimAI-CADViewer-Skill：解压后第一层就是 skill 目录本身，
+// 运行时组件（server/、web/dist/、bin/…）都在同一个目录内，cad.mjs 向上即可找到根。
+const STAGE = path.join(releaseDir(), "skill-full", SKILL_NAME);
 const ZIP = path.join(releaseDir(), `${NAME}.zip`);
 
 fs.rmSync(STAGE, { recursive: true, force: true });
@@ -65,10 +70,16 @@ const cadcraft = copyCadcraft(STAGE);
 // 5) 自定义对象解析组件（闭源二进制）+ MPL-2.0 许可附件
 const udo = copyClosedSourceBinary(STAGE);
 
-// 6) 许可与第三方声明
-for (const f of ["LICENSE", "THIRD-PARTY.md"]) {
+// 6) 许可与第三方声明 + 运行时目录 + 双击启动脚本
+for (const f of ["LICENSE", "THIRD-PARTY.md", "start.bat"]) {
   const src = path.join(ROOT, f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(STAGE, f));
+}
+// data/ 只放目录说明：data/uploads/ 是用户原始图纸（隐私），绝不进包。
+const dataReadme = path.join(ROOT, "data", "README.md");
+if (fs.existsSync(dataReadme)) {
+  fs.mkdirSync(path.join(STAGE, "data"), { recursive: true });
+  fs.copyFileSync(dataReadme, path.join(STAGE, "data", "README.md"));
 }
 if (udo.included) {
   // 根目录再放一份“为什么有 licenses/”的说明，免得用户当成垃圾文件删掉
@@ -90,16 +101,27 @@ if (udo.included) {
 
 // 7) 读我
 fs.writeFileSync(
-  path.join(STAGE, "使用说明.txt"),
-  `${SKILL_NAME} ${ver}（完整包）
+  path.join(STAGE, "INSTALL.txt"),
+  "\uFEFF" + `${SKILL_NAME} ${ver}（完整包）
 
-一、里面有什么
-  Skill\\             agent 用的 Skill（薄 SKILL.md + skill.json + 命令层）+ 一键安装脚本
-  server\\            本地服务（扫描 / 对比引擎 / 导出 / 自定义对象解析调用）
-  web\\dist\\          已构建好的界面（不用 npm install、不用构建）
-  bin\\cadcraft\\      DWG 转换器（已内置）
-  bin\\udo-cli\\      自定义对象解析组件（已内置，闭源二进制）
-  licenses\\          解析组件的第三方许可与源码获取说明（MPL-2.0，请勿删除）
+一、里面有什么（解压后第一层就是 skill 目录本身）
+  ${SKILL_NAME}/
+    SKILL.md          给模型的能力说明（agent 平台要求它在第一层目录里）
+    skill.json        机器可读清单（版本由构建注入）
+    README.md         人读的安装 / 打包说明
+    install.ps1 · install.cmd · install.sh    一键安装
+    scripts/          cad.mjs 命令层（唯一入口）
+    references/       cli · compare · measure · udo · answering · api · troubleshooting
+    server/           本地服务（扫描 / 对比引擎 / 导出 / 自定义对象解析调用）
+    web/dist/         已构建好的界面（不用 npm install、不用构建）
+    bin/cadcraft/     DWG 转换器（已内置）
+    bin/udo-cli/      自定义对象解析组件（已内置，闭源二进制）
+    licenses/         解析组件的第三方许可与源码获取说明（MPL-2.0，请勿删除）
+    shared/           服务端共用的几何模块
+    data/             用户图纸目录（只带目录说明，不含任何图纸）
+    start.bat         双击启动界面（可选，CLI 不需要）
+
+  把 ${SKILL_NAME} 这个目录整个交给 agent（或上传整个 zip）即可；不要把 SKILL.md 单独摘出来。
 
 二、对方需要什么
   · Windows 10/11 x64
@@ -107,9 +129,10 @@ fs.writeFileSync(
   · 支持 skills 的 agent（OpenCode / WorkBuddy / Claude Code / Cursor 等）
 
 三、怎么装（两步）
-  1) 解压到一个固定位置（建议 D:\\CADViewer；注册用的是目录联接，装完不能随便移动）
-  2) 在该目录执行：
-       powershell -ExecutionPolicy Bypass -File Skill\\install.ps1
+  1) 解压到一个固定位置（建议 D:/CADViewer；注册用的是目录联接，装完不能随便移动）
+  2) 进入解压后的 ${SKILL_NAME}/ 目录执行：
+       powershell -ExecutionPolicy Bypass -File install.ps1
+     （也可以直接双击 install.cmd）
      看到 doctor: ok 就装完了（degraded 为空 = 连自定义对象解析都可用）。
 
 四、装完怎么用
@@ -133,11 +156,41 @@ fs.writeFileSync(
   "utf8"
 );
 
-// 8) 闭源边界校验 + 压缩
+// 8) 闭源边界校验 + 压缩 + zip 布局硬校验
 assertNoForbiddenSources(STAGE);
+writeRootInstaller(STAGE);
 const zipBytes = zipStage(STAGE, ZIP);
 
-const skillBytes = dirSize(path.join(STAGE, "Skill"));
+assertSkillZipLayout(ZIP, {
+  label: NAME,
+  files: [
+    "scripts/cad.mjs",
+    "references/cli.md",
+    "install.ps1",
+    "install.sh",
+    "INSTALL.txt",
+    "LICENSE",
+    "THIRD-PARTY.md",
+    "start.bat",
+    "server/index.js",
+    "server/scanner.js",
+    "shared/geometry/index.mjs",
+    "web/dist/index.html",
+    "bin/udo-cli/udo-cli.exe",
+    "licenses/acadrust-MPL-2.0.txt",
+    "licenses/acadrust-SOURCE.txt",
+    "licenses/acadrust-NOTICE.txt",
+    "licenses/udo-cli-NOTICE.md",
+    "licenses/udo-cli-LICENSE-MIT.txt",
+    "licenses/udo-cli-LICENSE-APACHE.txt",
+  ],
+});
+
+const skillBytes =
+  dirSize(SKILL_SRC) +
+  ["README.md", "install.ps1", "install.sh", "install.cmd", "INSTALL.txt", "LICENSE", "THIRD-PARTY.md", "start.bat"]
+    .map((f) => (fs.existsSync(path.join(STAGE, f)) ? fs.statSync(path.join(STAGE, f)).size : 0))
+    .reduce((a, b) => a + b, 0);
 const serverBytes = dirSize(path.join(STAGE, "server"));
 const webBytes = dirSize(path.join(STAGE, "web", "dist"));
 const fontBytes = fs.existsSync(path.join(STAGE, "web", "dist", "fonts"))
@@ -146,9 +199,10 @@ const fontBytes = fs.existsSync(path.join(STAGE, "web", "dist", "fonts"))
 const licenseBytes = fs.existsSync(path.join(STAGE, "licenses"))
   ? dirSize(path.join(STAGE, "licenses"))
   : 0;
-const docBytes = ["LICENSE", "THIRD-PARTY.md"]
-  .map((f) => (fs.existsSync(path.join(STAGE, f)) ? fs.statSync(path.join(STAGE, f)).size : 0))
-  .reduce((a, b) => a + b, 0);
+const docBytes = ["data/README.md"].reduce(
+  (a, f) => a + (fs.existsSync(path.join(STAGE, f)) ? fs.statSync(path.join(STAGE, f)).size : 0),
+  0
+);
 
 printReport({
   title: `完整包 ${NAME}`,
@@ -156,13 +210,13 @@ printReport({
   zipPath: ZIP,
   zipBytes,
   breakdown: [
-    ["Skill/", skillBytes],
+    ["SKILL.md+scripts+refs+安装/声明", skillBytes],
     ["server/（全量）", serverBytes],
     [`web/dist（字体 ${(fontBytes / 1048576).toFixed(1)} MB）`, webBytes],
     ["bin/cadcraft（CLI）", cadcraft.bytes],
     ["bin/udo-cli（解析组件）", udo.bytes],
     ["licenses/", licenseBytes],
-    ["LICENSE + THIRD-PARTY", docBytes],
+    ["data/（仅目录说明）", docBytes],
   ],
   extra: [
     `服务端补齐：${serverCount} 个额外文件`,

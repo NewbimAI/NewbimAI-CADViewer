@@ -14,6 +14,8 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { copyClosedSourceBinary } from "./skill-build-lib.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "server/package.json"), "utf8"));
 const VERSION = pkg.version;
@@ -61,7 +63,7 @@ if (!fs.existsSync(nodeZip) || crypto.createHash("sha256").update(fs.readFileSyn
 step("2/6 目录骨架");
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.rmSync(ZIP, { force: true });
-for (const d of ["server", "web", "bin", "node", "data"]) fs.mkdirSync(path.join(OUT, d), { recursive: true });
+for (const d of ["server", "web", "bin", "node", "data", "shared"]) fs.mkdirSync(path.join(OUT, d), { recursive: true });
 
 // ---------------------------------------------------------------- 3. 拷源码
 step("3/6 拷服务端 / 前端产物 / cadcraft");
@@ -79,7 +81,12 @@ for (const f of fs.readdirSync(path.join(ROOT, "server"))) {
 }
 fs.copyFileSync(path.join(ROOT, "server/package-lock.json"), path.join(OUT, "server/package-lock.json"));
 copy(path.join(ROOT, "web/dist"), path.join(OUT, "web/dist"));
+// server/dxf-web.js 与 compare.js 都 import ../shared/geometry/index.mjs，必须随包分发
+copy(path.join(ROOT, "shared"), path.join(OUT, "shared"));
 copyCadcraft(path.join(ROOT, "bin/cadcraft"), path.join(OUT, "bin/cadcraft"));
+// 自定义对象解析组件（闭源二进制）+ 必须随附的 MPL-2.0 许可附件；缺附件会直接抛错。
+const udo = copyClosedSourceBinary(OUT);
+console.log(udo.included ? `  udo-cli ${mb(udo.bytes)} + ${udo.licenses.length} 个许可附件` : `  udo-cli 未打包：${udo.reason}`);
 for (const f of ["LICENSE", "THIRD-PARTY.md", "README.md", "CLA.md"]) {
   if (fs.existsSync(path.join(ROOT, f))) fs.copyFileSync(path.join(ROOT, f), path.join(OUT, f));
 }
@@ -141,7 +148,7 @@ pushd server
 popd
 `, "utf8");
 
-fs.writeFileSync(path.join(OUT, "使用说明.txt"), `CADViewer ${VERSION} 便携版（Windows 10/11 x64）
+fs.writeFileSync(path.join(OUT, "INSTALL.txt"), "\uFEFF" + `CADViewer ${VERSION} 便携版（Windows 10/11 x64）
 
 一、怎么用
   1. 把整个文件夹解压到任意位置（路径含中文也可以，但不要放在只读目录）。

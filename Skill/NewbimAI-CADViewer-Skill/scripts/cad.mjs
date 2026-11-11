@@ -126,7 +126,7 @@ function resolveProjectRoot(explicitRoot) {
     `找不到 CADViewer 项目根。请用以下任一方式指定：\n` +
       `  1) node cad.mjs <命令> ... --root "<CADViewer 项目根>"\n` +
       `  2) set CADVIEWER_ROOT=<CADViewer 项目根>\n` +
-      `  3) 运行 Skill\\install.ps1（或 install.sh）把 Skill 链进 agent 目录——装好后无需任何变量\n` +
+      `  3) 运行包内的 install.ps1 / install.cmd（或 install.sh）把 Skill 链进 agent 目录——装好后无需任何变量\n` +
       `判据：<根>/server/scanner.js 存在。`
   );
 }
@@ -1326,7 +1326,10 @@ async function cmdOpen(ctx, srcAbs, opts) {
   const served = await cmdServe(ctx, opts);
   if (!served || served.ok === false) return served;
 
-  const q = "?open=" + encodeURIComponent(dxf.dxfPath);
+  // 界面上要显示用户给的原图（DWG 就显示 DWG 文件名与格式）。
+  // converted.dxf 只是 CLI 侧的解析产物，属于实现细节，不能拿去当界面标签。
+  // 服务端自己会转换并缓存，这里传原图的绝对路径。
+  const q = "?open=" + encodeURIComponent(path.resolve(srcAbs));
   // 服务对外监听时优先给局域网地址（远端 agent 的浏览器才够得着）；否则就是本机地址
   const primary = (served.lanUrls && served.lanUrls.length ? served.lanUrls[0] : served.url) + "/" + q;
   const local = served.url + "/" + q;

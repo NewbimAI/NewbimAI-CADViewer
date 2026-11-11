@@ -16,20 +16,25 @@ import path from "node:path";
 
 import {
   SKILL_NAME,
+  SKILL_SRC,
   appVersion,
   printReport,
   zipStage,
+  writeRootInstaller,
   releaseDir,
   copySkillTree,
   copyServerModules,
   dirSize,
   assertNoForbiddenSources,
+  assertSkillZipLayout,
   sourceManifest,
 } from "./skill-build-lib.mjs";
 
 const ver = appVersion();
 const NAME = `${SKILL_NAME}-${ver}`;
-const STAGE = path.join(releaseDir(), "skill", NAME);
+// stage 目录名必须是 NewbimAI-CADViewer-Skill：zipStage 用 `-C parent <stage basename>`，
+// 这样解压后第一层就是 skill 目录本身（SKILL.md 在第一层），agent 平台才认得。
+const STAGE = path.join(releaseDir(), "skill", SKILL_NAME);
 const ZIP = path.join(releaseDir(), `${NAME}.zip`);
 
 fs.rmSync(STAGE, { recursive: true, force: true });
@@ -43,14 +48,27 @@ const modules = copyServerModules(STAGE);
 
 // 3) 读我
 fs.writeFileSync(
-  path.join(STAGE, "使用说明.txt"),
-  `${SKILL_NAME} ${ver}（轻量包 · 安装时自动补全）
+  path.join(STAGE, "INSTALL.txt"),
+  "\uFEFF" + `${SKILL_NAME} ${ver}（轻量包 · 安装时自动补全）
 
-一、这个包为什么小
+一、这个包为什么小，以及解压后长什么样
   包内只有：agent 用的 Skill（薄 SKILL.md + skill.json + 命令层）
   + CLI 实际 import 的服务端模块 + 服务端清单。
   界面、服务端全量代码、DWG 转换器、自定义对象解析组件都不在包里，
   安装时自动补回来——所以可以上传到有 3MB 限制的 agent 平台。
+
+  解压后第一层就是 skill 目录本身（agent 平台要求的标准结构）：
+    ${SKILL_NAME}/
+      SKILL.md            给模型的能力说明
+      skill.json          机器可读清单（版本由构建注入）
+      README.md           人读的安装 / 打包说明
+      install.ps1 · install.cmd · install.sh    一键安装
+      scripts/            cad.mjs 命令层（唯一入口）+ commands/
+      references/         cli · compare · measure · udo · answering · api · troubleshooting
+      server/             CLI 直接 import 的服务端模块 + 清单
+      shared/             服务端共用的几何模块
+
+  把这个目录整个交给 agent（或上传整个 zip）即可；不要把 SKILL.md 单独摘出来。
 
 二、对方需要什么
   · Windows 10/11 x64（macOS / Linux 只能做 DXF 只读命令）
@@ -58,9 +76,10 @@ fs.writeFileSync(
   · 联网（安装时要下载组件）
 
 三、怎么装（一条命令，装完即止）
-  1) 解压到一个固定位置（建议 D:\\CADViewer；装完不能随便移动，注册用的是目录联接）
-  2) 在该目录执行：
-       powershell -ExecutionPolicy Bypass -File Skill\\install.ps1
+  1) 解压到一个固定位置（建议 D:/CADViewer；装完不能随便移动，注册用的是目录联接）
+  2) 进入解压后的 ${SKILL_NAME}/ 目录执行：
+       powershell -ExecutionPolicy Bypass -File install.ps1
+     （也可以直接双击 install.cmd）
      它会依次：注册 Skill → 下载转换器（约 57MB）→ 补界面与服务端（约 18MB）→ 跑 doctor
      看到 doctor: ok 就装完了，不需要再拿图纸验证。
 
@@ -91,26 +110,46 @@ fs.writeFileSync(
 assertNoForbiddenSources(STAGE);
 
 // 5) 压缩 + 报告
+writeRootInstaller(STAGE);
 const zipBytes = zipStage(STAGE, ZIP);
 
-const skillBytes = dirSize(path.join(STAGE, "Skill"));
+// 6) zip 布局硬校验：解压后第一层必须是 NewbimAI-CADViewer-Skill/，且其下直接有 SKILL.md
+assertSkillZipLayout(ZIP, {
+  label: NAME,
+  files: [
+    "scripts/cad.mjs",
+    "scripts/manifest.mjs",
+    "references/cli.md",
+    "install.ps1",
+    "install.sh",
+    "INSTALL.txt",
+    "server/scanner.js",
+    "shared/geometry/index.mjs",
+  ],
+});
+
+const skillBytes =
+  dirSize(SKILL_SRC) +
+  ["README.md", "install.ps1", "install.sh", "install.cmd"]
+    .map((f) => (fs.existsSync(path.join(STAGE, f)) ? fs.statSync(path.join(STAGE, f)).size : 0))
+    .reduce((a, b) => a + b, 0);
 const serverBytes = dirSize(path.join(STAGE, "server"));
-const txtBytes = fs.statSync(path.join(STAGE, "使用说明.txt")).size;
+const txtBytes = fs.statSync(path.join(STAGE, "INSTALL.txt")).size;
 printReport({
   title: `轻量包 ${NAME}`,
   stage: STAGE,
   zipPath: ZIP,
   zipBytes,
   breakdown: [
-    ["Skill/（文档+命令层）", skillBytes],
+    ["SKILL.md+scripts+refs", skillBytes],
     ["server/（模块+清单）", serverBytes],
-    ["使用说明.txt", txtBytes],
+    ["INSTALL.txt", txtBytes],
   ],
   extra: [`服务端模块：${modules.join(", ")}`],
 });
 
 // 供 CI / 校验脚本读取
-const manifest = JSON.parse(fs.readFileSync(path.join(STAGE, "Skill", SKILL_NAME, "skill.json"), "utf8"));
+const manifest = JSON.parse(fs.readFileSync(path.join(STAGE, "skill.json"), "utf8"));
 const expectedModules = sourceManifest()?.requires?.serverModules || [];
 if (manifest.version !== ver) {
   throw new Error(`包内 skill.json 版本 ${manifest.version} 与 server/package.json ${ver} 不一致`);

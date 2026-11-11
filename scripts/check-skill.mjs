@@ -3,6 +3,8 @@
  *
  *   node scripts/check-skill.mjs                 # 校验源码树（Skill/NewbimAI-CADViewer-Skill）
  *   node scripts/check-skill.mjs --package <dir> # 校验打包后的 stage 目录（含闭源边界）
+ *   node scripts/check-skill.mjs --zip <a.zip> --zip <b.zip>  # 校验 zip 第一层必须是
+ *                                                # NewbimAI-CADViewer-Skill/ 且其下直接有 SKILL.md
  *   node scripts/check-skill.mjs --self-test     # 额外跑命令层纯函数断言
  *
  * 退出码：0 全部通过；1 有失败项。输出 JSON，便于 CI 读取。
@@ -15,6 +17,7 @@ import {
   SKILL_NAME,
   SKILL_SRC,
   appVersion,
+  assertSkillZipLayout,
   dirSize,
   readJson,
 } from "./skill-build-lib.mjs";
@@ -23,6 +26,10 @@ const args = process.argv.slice(2);
 const pkgIndex = args.indexOf("--package");
 const PACKAGE_DIR = pkgIndex >= 0 ? path.resolve(args[pkgIndex + 1] || "") : null;
 const SELF_TEST = args.includes("--self-test");
+const ZIP_PATHS = args.reduce(
+  (acc, a, i) => (a === "--zip" && args[i + 1] ? [...acc, path.resolve(args[i + 1])] : acc),
+  []
+);
 
 const results = [];
 const ok = (name, detail = "") => results.push({ name, ok: true, detail });
@@ -31,8 +38,13 @@ const bad = (name, detail = "") => results.push({ name, ok: false, detail });
 const version = appVersion();
 
 /* ---------- 源码树 / 包内 Skill 目录 ---------- */
+// 包的标准布局是「解压后第一层就是 skill 目录」：<pkg>/SKILL.md。
+// 旧布局（<pkg>/Skill/<name>/SKILL.md）只为历史产物保留兼容。
+const PACKAGE_FLAT = !!PACKAGE_DIR && fs.existsSync(path.join(PACKAGE_DIR, "SKILL.md"));
 const skillDir = PACKAGE_DIR
-  ? path.join(PACKAGE_DIR, "Skill", SKILL_NAME)
+  ? PACKAGE_FLAT
+    ? PACKAGE_DIR
+    : path.join(PACKAGE_DIR, "Skill", SKILL_NAME)
   : SKILL_SRC;
 
 if (!fs.existsSync(path.join(skillDir, "SKILL.md"))) {
@@ -159,10 +171,15 @@ if (PACKAGE_DIR) {
     if (!hits.length) ok("package-boundary", "无 crates/ · Cargo* · target/ · *.rlib");
     else bad("package-boundary", hits.join("; "));
 
-    const installers = ["Skill/install.ps1", "Skill/install.sh", "Skill/README.md"]
-      .filter((f) => fs.existsSync(path.join(PACKAGE_DIR, f)));
-    if (installers.length === 3) ok("package-installers", installers.join(", "));
-    else bad("package-installers", `缺少：${["Skill/install.ps1", "Skill/install.sh", "Skill/README.md"].filter((f) => !installers.includes(f)).join(", ")}`);
+    if (PACKAGE_FLAT) ok("package-layout", "平铺：包根直接有 SKILL.md（agent 平台标准结构）");
+    else bad("package-layout", "包根没有 SKILL.md（旧嵌套布局，agent 平台会报「不含 SKILL.md」）");
+
+    const installerRels = PACKAGE_FLAT
+      ? ["install.ps1", "install.sh", "README.md"]
+      : ["Skill/install.ps1", "Skill/install.sh", "Skill/README.md"];
+    const installers = installerRels.filter((f) => fs.existsSync(path.join(PACKAGE_DIR, f)));
+    if (installers.length === installerRels.length) ok("package-installers", installers.join(", "));
+    else bad("package-installers", `缺少：${installerRels.filter((f) => !installers.includes(f)).join(", ")}`);
 
     const udoDir = path.join(PACKAGE_DIR, "bin", "udo-cli");
     if (fs.existsSync(udoDir)) {      const need = [
@@ -177,6 +194,55 @@ if (PACKAGE_DIR) {
     } else {
       ok("mpl-attachments", "包内无解析组件二进制，无需附件");
     }
+  }
+}
+
+/* ---------- zip 布局（--zip，可重复；包外第一层必须是 skill 目录名） ---------- */
+const LIGHT_FILES = [
+  "SKILL.md",
+  "skill.json",
+  "scripts/cad.mjs",
+  "references/cli.md",
+  "install.ps1",
+  "install.sh",
+  "INSTALL.txt",
+  "server/scanner.js",
+  "shared/geometry/index.mjs",
+];
+const FULL_ONLY_FILES = [
+  "LICENSE",
+  "THIRD-PARTY.md",
+  "start.bat",
+  "server/index.js",
+  "web/dist/index.html",
+  "bin/udo-cli/udo-cli.exe",
+  "licenses/acadrust-MPL-2.0.txt",
+  "licenses/acadrust-SOURCE.txt",
+  "licenses/acadrust-NOTICE.txt",
+  "licenses/udo-cli-NOTICE.md",
+  "licenses/udo-cli-LICENSE-MIT.txt",
+  "licenses/udo-cli-LICENSE-APACHE.txt",
+];
+
+for (const zipPath of ZIP_PATHS) {
+  const tag = path.basename(zipPath);
+  if (!fs.existsSync(zipPath)) {
+    bad(`zip-layout-${tag}`, `不存在：${zipPath}`);
+    continue;
+  }
+  const isFull = /-full-/i.test(tag);
+  try {
+    const { entries } = assertSkillZipLayout(zipPath, {
+      label: tag,
+      files: isFull ? [...LIGHT_FILES, ...FULL_ONLY_FILES] : LIGHT_FILES,
+    });
+    const fileCount = entries.filter((e) => !e.endsWith("/")).length;
+    ok(
+      `zip-layout-${tag}`,
+      `第一层 = ${SKILL_NAME}/，${fileCount} 个文件，${SKILL_NAME}/SKILL.md 直接位于第一层`
+    );
+  } catch (e) {
+    bad(`zip-layout-${tag}`, e.message);
   }
 }
 
@@ -229,6 +295,7 @@ const failed = results.filter((r) => !r.ok);
 const output = {
   ok: failed.length === 0,
   target: PACKAGE_DIR || skillDir,
+  zips: ZIP_PATHS,
   appVersion: version,
   skillName: SKILL_NAME,
   checks: results,

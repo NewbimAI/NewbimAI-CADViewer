@@ -8,6 +8,7 @@
  *  · 输出目录可用 CADVIEWER_RELEASE_DIR 重定向（默认 <root>/release，可指向临时目录做验证）。
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -46,9 +47,17 @@ export function dirSize(dir) {
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 const kb = (n) => `${(n / 1024).toFixed(0)} KB`;
 
-/** 复制 Skill 源码目录到 <stage>/Skill/<name>，并把版本注入包内 skill.json。 */
-export function copySkillTree(stage, version) {
-  const dst = path.join(stage, "Skill", SKILL_NAME);
+/**
+ * 复制 Skill 源码目录，并把版本注入包内 skill.json。
+ *
+ * flat=true（默认）：直接写到 stage 根 —— 解压后 zip 第一层就是 skill 目录本身
+ *   （<name>/SKILL.md、<name>/skill.json、<name>/scripts/…），这是 Claude Code /
+ *   opencode 等 agent 平台要求的标准结构；运行时组件（server/、web/dist/、bin/…）
+ *   也由调用方放在同一个 stage 根里，scripts/cad.mjs 从脚本目录向上即可找到 server/scanner.js。
+ * flat=false：旧布局，写到 <stage>/Skill/<name>（仅为兼容历史调用保留）。
+ */
+export function copySkillTree(stage, version, { flat = true } = {}) {
+  const dst = flat ? stage : path.join(stage, "Skill", SKILL_NAME);
   fs.cpSync(SKILL_SRC, dst, {
     recursive: true,
     filter: (src) => {
@@ -57,8 +66,9 @@ export function copySkillTree(stage, version) {
     },
   });
 
-  // 包根部的 Skill/ 还要带安装脚本与 README（使用说明里的命令就是 Skill\install.ps1）
-  const bundleDst = path.join(stage, "Skill");
+  // 安装脚本与 README 和 SKILL.md 放在同一层：平铺布局在 stage 根，
+  // 旧布局在 <stage>/Skill（那里的命令写作 Skill\install.ps1）。
+  const bundleDst = flat ? stage : path.join(stage, "Skill");
   fs.mkdirSync(bundleDst, { recursive: true });
   for (const f of ["README.md", "install.ps1", "install.sh"]) {
     const src = path.join(ROOT, "Skill", f);
@@ -87,11 +97,62 @@ export function copyServerModules(stage, { manifest = sourceManifest() } = {}) {
     fs.copyFileSync(src, path.join(dst, name));
     copied.push(name);
   }
+  // server/dxf-web.js 与 compare.js 都 import ../shared/geometry/index.mjs，
+  // 共享几何模块必须与 server 模块一起随包分发，否则启动即 ERR_MODULE_NOT_FOUND。
+  const sharedSrc = path.join(ROOT, "shared");
+  if (!fs.existsSync(sharedSrc)) throw new Error("缺少 shared/（服务端 import 了 ../shared/geometry）");
+  fs.cpSync(sharedSrc, path.join(stage, "shared"), { recursive: true });
   return copied;
 }
 
 /**
- * 闭源边界：包内不得出现解析组件源码、Cargo 清单、Rust 构建产物。
+ * 在包根放「一键安装」入口（双击 install.cmd 或跑 install.ps1 即可）。
+ *
+ * 平铺布局下 install.ps1 / install.sh 已经由 copySkillTree 复制到 stage 根、且自己就能
+ * 判断布局，这里**不再覆盖**它们，只补一个 Windows 双击入口 install.cmd。
+ * 旧嵌套布局（stage/Skill/<name>）才写三份薄转发脚本，保持向后兼容。
+ */
+export function writeRootInstaller(stage) {
+  const flat = fs.existsSync(path.join(stage, "SKILL.md"));
+
+  if (flat) {
+    const cmd = `@echo off\r\nrem 一键安装：双击或在本目录执行 install.cmd\r\nsetlocal\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" %*\r\n`;
+    fs.writeFileSync(path.join(stage, "install.cmd"), cmd, "utf8");
+    const shPath = path.join(stage, "install.sh");
+    if (fs.existsSync(shPath)) {
+      try {
+        fs.chmodSync(shPath, 0o755);
+      } catch {}
+    }
+    return;
+  }
+
+  const ps = `# 一键安装包装：把 Skill\\ 注册进 agent 的 skills 目录（转发给 Skill\\install.ps1）
+# 用法：powershell -ExecutionPolicy Bypass -File install.ps1 [-SkillsDir <dir>]
+$ErrorActionPreference = "Stop"
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$inner = Join-Path $here "Skill\\install.ps1"
+if (-not (Test-Path -LiteralPath $inner)) { throw "缺少 Skill\\install.ps1（安装包不完整，请重新解压）" }
+& $inner @args
+exit $LASTEXITCODE
+`;
+  const cmd = `@echo off\r\nrem 一键安装：双击或在本目录执行 install.cmd\r\nsetlocal\r\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Skill\\install.ps1" %*\r\n`;
+  const sh = `#!/usr/bin/env sh
+# 一键安装（macOS / Linux）：转发给 Skill/install.sh
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+exec sh "$here/Skill/install.sh" "$@"
+`;
+  fs.writeFileSync(path.join(stage, "install.ps1"), ps, "utf8");
+  fs.writeFileSync(path.join(stage, "install.cmd"), cmd, "utf8");
+  const shPath = path.join(stage, "install.sh");
+  fs.writeFileSync(shPath, sh, "utf8");
+  try {
+    fs.chmodSync(shPath, 0o755);
+  } catch {}
+}
+
+/**
  * 命中即抛错（宁可不发包，也不发错包）。
  */
 export function assertNoForbiddenSources(stage) {
@@ -200,6 +261,64 @@ export function zipStage(stage, zipPath) {
     );
   }
   return fs.statSync(zipPath).size;
+}
+
+/** 读 zip 内的条目名（含目录条目），用 .NET ZipFile，无需外部依赖。 */
+export function zipEntryNames(zipPath) {
+  const abs = path.resolve(zipPath).replace(/'/g, "''");
+  const outFile = path.join(os.tmpdir(), `skill-zip-entries-${process.pid}-${Date.now()}.txt`);
+  const ps = [
+    "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+    `$zip = [System.IO.Compression.ZipFile]::OpenRead('${abs}')`,
+    "try {",
+    "  $names = @($zip.Entries | ForEach-Object { $_.FullName })",
+    `  [System.IO.File]::WriteAllLines('${outFile.replace(/'/g, "''")}', [string[]]$names, (New-Object System.Text.UTF8Encoding($false)))`,
+    "} finally { $zip.Dispose() }",
+  ].join("\n");
+  execFileSync("powershell", ["-NoProfile", "-Command", ps], { stdio: ["ignore", "ignore", "inherit"] });
+  const text = fs.readFileSync(outFile, "utf8").replace(/^\uFEFF/, "");
+  fs.rmSync(outFile, { force: true });
+  return text.split(/\r?\n/).filter((l) => l.length > 0);
+}
+
+/**
+ * agent 平台要求的标准 skill 包布局：**解压后第一层就是 skill 目录本身**。
+ * 这里直接读 zip 条目校验，防止「SKILL.md 在第二层」的包再次被发出去。
+ *
+ * @param {string} zipPath
+ * @param {{ files?: string[], label?: string }} [opts] files 为相对 skill 目录的必需条目
+ * @returns {{ entries: string[], problems: string[] }}
+ */
+export function assertSkillZipLayout(zipPath, { files = [], label = zipPath } = {}) {
+  const entries = zipEntryNames(zipPath);
+  const problems = [];
+  const prefix = `${SKILL_NAME}/`;
+
+  if (!entries.length) problems.push("zip 是空的");
+
+  const outsiders = entries.filter((e) => e !== prefix && !e.startsWith(prefix));
+  if (outsiders.length) {
+    problems.push(
+      `zip 第一层必须是 ${SKILL_NAME}/，但有 ${outsiders.length} 个条目在它之外：` +
+        outsiders.slice(0, 5).join(", ") + (outsiders.length > 5 ? " …" : "")
+    );
+  }
+
+  for (const need of ["SKILL.md", "skill.json", ...files]) {
+    const entry = prefix + need;
+    if (!entries.includes(entry)) problems.push(`缺少 ${entry}`);
+  }
+
+  if (entries.some((e) => e.startsWith(`${prefix}Skill/`))) {
+    problems.push(`出现了旧布局 ${prefix}Skill/（SKILL.md 会被埋在第二层）`);
+  }
+
+  if (problems.length) {
+    throw new Error(
+      `zip 布局校验失败（${label}）：\n  ` + problems.join("\n  ")
+    );
+  }
+  return { entries, problems };
 }
 
 export function printReport({ title, stage, zipPath, zipBytes, breakdown, extra = [] }) {
