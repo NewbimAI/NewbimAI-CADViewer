@@ -31,7 +31,7 @@ export function downloadJson(file: OpenResult): void {
     statsError: file.statsError ?? null,
     skippedEntities: file.skippedEntities ?? 0,
     stats: file.stats ?? null,
-    tch: file.tch ?? null,
+    udo: file.udo ?? null,
     cadcraftInfo: file.cadcraftInfo ?? null,
   };
   downloadBlob(

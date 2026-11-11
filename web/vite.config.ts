@@ -7,6 +7,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // Forked dxf-viewer (MPL-2.0) — see web/vendor/README.md.
+      "dxf-viewer": path.resolve(__dirname, "./vendor/dxf-viewer/src/index.js"),
     },
   },
   server: {

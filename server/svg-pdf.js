@@ -16,6 +16,8 @@ import fs from "node:fs";
 import zlib from "node:zlib";
 
 const KAPPA = 0.5522847498; // 4 段三次贝塞尔近似圆
+/** Node 的单字符串上限（V8 ~512MB，留 12% 余量）。实测机柜图纸 SVG 有 5.45GB。 */
+const MAX_SVG_STRING_BYTES = 460 * 1024 * 1024;
 const ELEMENT_RE = /<(polyline|path|circle)\b([^>]*)>/g;
 const ATTR_RE = /([\w:-]+)\s*=\s*"([^"]*)"/g;
 const POINT_NUM_RE = /[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g;
@@ -23,11 +25,45 @@ const PATH_TOKEN_RE = /[MLZmlz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g;
 /** path 里出现这些命令说明不是我们支持的子集：整条 path 跳过，避免把控制点当直线画歪。 */
 const UNSUPPORTED_PATH_CMD_RE = /[CcSsQqTtAaHhVv]/;
 
-/** 坐标/线宽格式化：最多 4 位小数，去掉无意义的尾零。 */
-function fmt(n) {
+/** 坐标/线宽格式化：最多 4 位小数，去掉无意义的尾零。 */function fmt(n) {
   if (!Number.isFinite(n)) return "0";
   const r = Math.round(n * 10000) / 10000;
   return String(r === 0 ? 0 : r);
+}
+
+/**
+ * 矩阵分量格式化：**不能**用 fmt 的 4 位小数！
+ * 实测 智能化图纸：k = 1105.8 / 630498.4 = 0.00175389…，fmt 成 "0.0018" 后
+ * 比例误差 +2.63%，图形整体放大、右侧版面被推出 MediaBox 裁掉。
+ * 这里保留 10 位有效小数，并把极小的数写成指数（PDF 允许 1e-5 这种写法）。
+ */
+function fmtM(n) {
+  if (!Number.isFinite(n)) return "0";
+  if (n === 0) return "0";
+  const abs = Math.abs(n);
+  if (abs < 1e-6) return n.toExponential(6);
+  const r = Math.round(n * 1e10) / 1e10;
+  return String(r === 0 ? 0 : r);
+}
+
+/** 稳健内容包围盒：K 倍「p10..p90 核心区」之外的稀疏点视为飞点，不参与取景。 */
+
+/**
+ * 取景框 = SVG 的 viewBox。
+ *
+ * 已验证（container 实测，勿再改成 min/max）：
+ *   · cadcraft 的 viewBox 由服务端传的 `--window contentBox` 决定，宽度/高度与
+ *     meta.stats.contentBox **完全相等**（施工005 608529.45×243234.07、智能化 630498.40×357898.93），
+ *     即它就是一个「稳健模型范围」，不是随手写的；
+ *   · 同一份 SVG 里另有远离主图的版面副本与 1e9 级飞点（施工005 有 4.8 万个元素完全在外，
+ *     y 最高到 3.0e6、x 到 7.8e11）。按 min/max 取景会把主图缩成一个点。
+ * 所以：用 viewBox 取景，**把完全落在框外的元素直接不画**（见 convertSvgToPdf 的 outside 剪枝）。
+ * 旧代码不剪枝，这些副本会画到页边之外，看起来像“图纸被裁”。
+ *
+ * @returns {{x:number,y:number,w:number,h:number}}
+ */
+function frameBox(vb) {
+  return { x: vb.x, y: vb.y, w: vb.w, h: vb.h };
 }
 
 function parseAttrs(s) {
@@ -251,26 +287,54 @@ function pageSize(vbW, vbH) {
  * 把 cadcraft SVG 转成 PDF 文件。
  * @param {string} svgPath
  * @param {string} pdfPath
- * @returns {{bytes:number, elements:number, circles:number, polylines:number, paths:number, pageWidth:number, pageHeight:number, orientation:string}}
+ * @returns {{bytes:number, elements:number, circles:number, polylines:number, paths:number,
+ *           skippedOutside:number, contentBox:{x:number,y:number,w:number,h:number},
+ *           viewBox:{x:number,y:number,w:number,h:number}, scale:number,
+ *           pageWidth:number, pageHeight:number, orientation:string}}
  */
 export function convertSvgToPdf(svgPath, pdfPath) {
-  const svg = fs.readFileSync(svgPath, "utf8");
+  /* Node 单字符串上限约 512MB（ERR_STRING_TOO_LONG）。超过就明确抛 TOO_LARGE，
+   * 让路由返回 413 + “图纸过大”提示，而不是 500 + “Cannot create a string longer…” */
+  const svgBytes = fs.statSync(svgPath).size;
+  if (svgBytes > MAX_SVG_STRING_BYTES) {
+    const e = new Error("图纸过大，暂不支持矢量 PDF 导出");
+    e.code = "TOO_LARGE";
+    throw e;
+  }
+  let svg;
+  try {
+    svg = fs.readFileSync(svgPath, "utf8");
+  } catch (e) {
+    if (e.code === "ERR_STRING_TOO_LONG") {
+      const err = new Error("图纸过大，暂不支持矢量 PDF 导出");
+      err.code = "TOO_LARGE";
+      throw err;
+    }
+    throw e;
+  }
   const vb = readViewBox(svg);
   if (!vb) throw new Error("SVG 缺少可用的 viewBox/width/height");
 
-  const page = pageSize(vb.w, vb.h);
+  /* cadcraft 的 viewBox == 服务端传入的 contentBox（宽高逐位相等），是稳健的模型范围；
+   * 框外的是版面副本/飞点，下面按元素 bbox 剪枝，不再画到页面外。 */
+  const box = frameBox(vb);
+  const page = pageSize(box.w, box.h);
   // 5% 边距（按页面短边算）
   const margin = Math.min(page.w, page.h) * 0.05;
-  const k = Math.min((page.w - 2 * margin) / vb.w, (page.h - 2 * margin) / vb.h);
+  const k = Math.min((page.w - 2 * margin) / box.w, (page.h - 2 * margin) / box.h);
   if (!(k > 0) || !Number.isFinite(k)) throw new Error("SVG 尺寸无效");
-  const tx = (page.w - k * vb.w) / 2 - k * vb.x;
-  const ty = (page.h + k * vb.h) / 2 + k * vb.y;
+  const tx = (page.w - k * box.w) / 2 - k * box.x;
+  const ty = (page.h + k * box.h) / 2 + k * box.y;
 
   const writer = new ContentWriter();
   // 关键：所有几何都直接用 SVG 用户坐标；线宽也直接写 stroke-width，
   // PDF 会随 CTM 一起缩放，无需在主进程里手算。
+  // 矩阵用 fmtM（10 位小数）：4 位舍入会让比例偏差 2.6%，内容被推出页面。
+  // 再按 viewBox 矩形做一次裁剪：跨界的版面副本/飞点就被框在页面内容区里，
+  // 不会再画到页边之外（旧产物会出现“图纸溢出页面”的观感）。
   writer.push(
-    `q\n${fmt(k)} 0 0 ${fmt(-k)} ${fmt(tx)} ${fmt(ty)} cm\n1 J 1 j\n`
+    `q\n${fmtM(k)} 0 0 ${fmtM(-k)} ${fmtM(tx)} ${fmtM(ty)} cm\n` +
+      `${fmt(box.x)} ${fmt(box.y)} ${fmt(box.w)} ${fmt(box.h)} re W n\n1 J 1 j\n`
   );
 
   /** opacity → ExtGState 名；同值复用 */
@@ -289,6 +353,44 @@ export function convertSvgToPdf(svgPath, pdfPath) {
   let circles = 0;
   let polylines = 0;
   let paths = 0;
+  let skippedOutside = 0;
+  /* 取景范围外扩 2%：保留压在页边的线宽/圆角，不让内容因为取整被咬掉。 */
+  const padX = box.w * 0.02;
+  const padY = box.h * 0.02;
+  const view = {
+    x0: box.x - padX,
+    x1: box.x + box.w + padX,
+    y0: box.y - padY,
+    y1: box.y + box.h + padY,
+  };
+  /** 元素 bbox 完全在取景范围外 → 不画（飞点/远距离副本，画了也看不见） */
+  const outside = (pts) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i + 1 < pts.length; i += 2) {
+      const x = pts[i];
+      const y = pts[i + 1];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) return false; // 没点就别乱跳
+    return maxX < view.x0 || minX > view.x1 || maxY < view.y0 || minY > view.y1;
+  };
+  const pointArray = (str) => {
+    const out = [];
+    POINT_NUM_RE.lastIndex = 0;
+    let t;
+    while ((t = POINT_NUM_RE.exec(str))) {
+      const v = Number(t[0]);
+      if (Number.isFinite(v)) out.push(v);
+    }
+    return out;
+  };
 
   ELEMENT_RE.lastIndex = 0;
   let m;
@@ -310,6 +412,28 @@ export function convertSvgToPdf(svgPath, pdfPath) {
       const doFill = !!fill && !isWhite(fill);
       const doStroke = !!stroke;
       if (!doFill && !doStroke) continue;
+
+      // 飞点/远副本剪枝：整条元素都在取景范围外就不产出操作符
+      if (tag === "polyline" || tag === "path") {
+        const src = tag === "polyline" ? attrs.points : attrs.d;
+        if (src && outside(pointArray(src))) {
+          skippedOutside++;
+          continue;
+        }
+      } else {
+        const cx = Number.parseFloat(attrs.cx);
+        const cy = Number.parseFloat(attrs.cy);
+        const r = Number.parseFloat(attrs.r);
+        if (
+          Number.isFinite(cx) &&
+          Number.isFinite(cy) &&
+          Number.isFinite(r) &&
+          (cx + r < view.x0 || cx - r > view.x1 || cy + r < view.y0 || cy - r > view.y1)
+        ) {
+          skippedOutside++;
+          continue;
+        }
+      }
 
       if (hasOpacity) writer.push(`/${gsName(opacity)} gs\n`);
 
@@ -438,6 +562,10 @@ export function convertSvgToPdf(svgPath, pdfPath) {
     circles,
     polylines,
     paths,
+    skippedOutside,
+    contentBox: { x: box.x, y: box.y, w: box.w, h: box.h },
+    viewBox: vb,
+    scale: k,
     pageWidth: page.w,
     pageHeight: page.h,
     orientation: page.orientation,

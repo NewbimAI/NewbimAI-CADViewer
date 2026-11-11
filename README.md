@@ -5,7 +5,7 @@
 - **服务端**：Node.js + Express + `cadcraft-cli`（DWG→DXF 转换）+ 自研流式 DXF 统计
 - **前端**：Vite + React + TypeScript + Tailwind CSS + shadcn/ui
 - **渲染**：`dxf-viewer`（MPL-2.0）+ three.js，WebGL 直读 DXF
-- **字体**：Noto Serif SC（SIL OFL 1.1），随包分发，不依赖系统字体
+- **字体**：随包 Noto Sans SC / Symbols 2 / Serif SC（SIL OFL 1.1）；**SHX 文字**按图纸 STYLE 表在本机取字体，服务端转成笔画几何
 
 ## 功能
 
@@ -17,7 +17,14 @@
   - `*T` → 表格、`*D` → 标注、`*X` → 填充及其父块
   - `A$...` 这类无来源信息的块，如实显示「来源未知」，不伪造
 - 导出：**PNG**（当前视图、白底、2×）、**统计 JSON**、**原始 DXF**、**矢量 PDF**
-- 天正图纸：本版**不解析** `TCH_*` 自定义对象，打开时会提示「在天正中导出 T3 后再打开」
+- **测量工具**：距离、连续长度、面积、角度、半径、坐标；吸附端点 / 中点 / 圆心 / 象限点 / 交点 / 线上最近点，缩放时数值与标注不漂移
+- **图纸比对**：两份已打开的图纸做实体级差异（新增 / 删除 / 修改），画布上叠加显示并列出变更集，支持定位与筛选
+- **自动更新**：顶部按钮检查新版本 → 下载校验 → 重启替换（只替换应用文件，`data/`、`node/`、`bin/` 不动）
+- **含自定义对象的图纸**：本版能解析其中一部分（墙、门窗洞口、文字、尺寸标注），其余部分暂不解析
+
+### 兼容性：含自定义对象的图纸
+
+现阶段对含自定义对象的图纸兼容性较差：部分自定义对象无法解析，图上可能缺少墙体、门窗、文字或标注。遇到这种情况，可先用设计软件把这些对象转换为 T3 档位（或导出为已展开的 DXF），再用本工具打开即可完整查看。
 
 ## Agent Skill（读图 / 统计 / 导出）
 
@@ -25,25 +32,39 @@
 
 - **必须与整个仓库一起使用**：`Skill/` 只是薄壳，单独拷走无法运行。
 - **Windows**：完整功能——DWG 转换、`dxf|svg|pdf|png|json` 导出、`serve` 起界面。
-- **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `tch` 与 `export --to json|dxf`；不支持 DWG 与图片 / PDF 导出。
+- **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `udo` 与 `export --to json|dxf`；不支持 DWG 与图片 / PDF 导出。
 - `bin/cadcraft/`（见下节）缺失时，DWG 转换与 `svg|pdf|png` 导出不可用，DXF 只读命令仍可用。
 
 注册方式与全部命令见 [`Skill/README.md`](./Skill/README.md)。一行示例：
 
 ```bash
-node Skill/cadviewer/scripts/cad.mjs summary "<图纸目录>\示例图纸.dwg"
+node Skill/NewbimAI-CADViewer-Skill/scripts/cad.mjs summary "<图纸目录>\示例图纸.dwg"
 ```
 
 ## 环境要求
 
 - **Node.js 20+**
-- **cadcraft-cli 便携版**：本仓库**不含**转换器二进制（约 127MB，不适合进仓库）。
+- **cadcraft-cli 便携版**：本仓库**不含**转换器二进制（解压前约 57MB、解压后约 127MB，不适合进仓库）。
   从 https://github.com/storytold/cadcraft/releases 下载
   `cadcraft-<版本>-windows-x64-portable.zip`，解压后使下面这个路径存在：
   ```
   bin/cadcraft/**/cadcraft-cli.exe
   ```
+  同包的 `cadcraft.exe` 是 EGUI 桌面主程序（约 75MB），本项目**从不调用**它；
+  删掉它、只留 `cadcraft-cli.exe` 即可，占用从约 127MB 降到约 53MB。
   实测 **0.7.0** 与 **0.8.0** 均可正常工作。只想看 DXF 的话可以不装它（DXF 统计不依赖 cadcraft）。
+- **udo-cli（可选）**：解析 DWG 里的自定义对象（`TCH_*` 一类），目前只上线**门窗洞口**。
+  仓库**不含**该二进制（`.gitignore` 排除 `bin/udo-cli/`），需要本地构建：
+
+  ```bash
+  cargo build --release            # 需要 Rust 1.75+；配置见 .cargo/config.toml
+  mkdir -p bin/udo-cli
+  cp target/release/udo-cli.exe bin/udo-cli/    # Windows；Linux/macOS 去掉 .exe
+  ```
+
+  也可以用环境变量 `CADVIEWER_UDO_CLI=/abs/path/udo-cli` 直接指定（旧名 `UDO_CLI` 仍兼容）。缺它时一切照旧：
+  洞口不注入，Web DXF 与没有该功能时**逐字节相同**。
+  兼容性与能力边界见下文「兼容性」一节；第三方组件与许可说明见 `THIRD-PARTY.md`。
 
 ## 启动
 
@@ -75,6 +96,7 @@ web/           React 前端（源码在 web/src，构建产物在 web/dist）
 Skill/         agent 用的命令行 Skill（见 Skill/README.md）
 data/          用户上传的原始图纸（不入库；缓存可以删，这里不要删）
 bin/cadcraft/  转换器（需自行下载，已被 .gitignore 排除）
+bin/udo-cli/   自定义对象（门窗洞口）解析器（cargo build --release 后复制，已被 .gitignore 排除）
 test/          本机开发脚本（不入库）
 ```
 

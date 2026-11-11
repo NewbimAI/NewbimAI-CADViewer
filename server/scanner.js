@@ -606,8 +606,12 @@ export async function scanDxf(absPath, onProgress) {
       color: l.color,
       colorHex: aciToHex(l.color),
       frozen: !!(l.flags & 1),
-      off: !!(l.flags & 4) || (l.rawColor ?? 7) < 0,
-      locked: !!(l.flags & 16),
+      /* DXF LAYER 组码 70 的标准标志位：bit1=冻结、bit2=新视口冻结、bit4=**锁定**、
+       * bit16=xref 依赖。旧代码把 bit4 当 off、把 bit16 当 locked（2026-11-08 修正）——
+       * 于是 `建筑` 这种普通锁定层在 UI 上被标成"关闭"，审计据此误判 cadcraft 丢了 off 标志。
+       * 真正的 off 只有一种表示：组码 62 为负。 */
+      off: (l.rawColor ?? 7) < 0,
+      locked: !!(l.flags & 4),
       entityCount: l.entityCount,
     })),
     blocks: displayBlocks,

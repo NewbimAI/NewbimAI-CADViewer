@@ -1,6 +1,6 @@
 {
   "name": "cadviewer-server",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Local CAD drawing viewer server powered by cadcraft-cli",
@@ -10,8 +10,12 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@mlightcad/shx-parser": "^1.4.5",
     "cors": "^2.8.5",
+    "docx": "^9.15.3",
+    "dxf-parser": "^1.1.2",
     "express": "^4.21.2",
+    "iconv-lite": "^0.7.3",
     "multer": "^2.0.1"
   }
 }

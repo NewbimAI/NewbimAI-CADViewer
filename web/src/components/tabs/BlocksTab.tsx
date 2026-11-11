@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownNarrowWide, ArrowDownAZ, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import DockTooltip from "@/components/DockTooltip";
+import FollowTooltip from "@/components/FollowTooltip";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatNumber } from "@/lib/utils";
@@ -61,14 +63,8 @@ export default function BlocksTab({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    // 只列"本图真的用到"的块定义。
-    // ⚠️ 不能只看 refCount：它只数顶层 INSERT，块定义仍可能被别的块内部引用（nestedRefCount）。
-    //    实测规律：refCount=0 的块里，多数其实被块内嵌套引用（例如某个设备类块被嵌 8 次），
-    //    只按 refCount 过滤会凭空隐藏这些正在用的块；两者都为 0 才是 PURGE 残留。
-    const used = (b: BlockInfo) =>
-      b.used === undefined
-        ? (b.refCount || 0) > 0 || (b.nestedRefCount || 0) > 0
-        : b.used !== false;
+    // 数量为 0 的块定义（含仅被嵌套引用、或残留待 PURGE 的）不在此列表展示，避免噪声。
+    const used = (b: BlockInfo) => (b.refCount || 0) > 0;
     const base = blocks.filter(used);
     const list = q
       ? base.filter((b) => b.name.toLowerCase().includes(q))
@@ -100,47 +96,53 @@ export default function BlocksTab({
             className="h-9 pl-9 pr-9 text-sm"
           />
           {query && (
-            <button
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="清空"
-              onClick={() => setQuery("")}
+            <DockTooltip
+              content="清空搜索"
+              wrapperClassName="absolute right-2 top-1/2 -translate-y-1/2"
             >
-              <X className="h-3.5 w-3.5" />
-            </button>
+              <button
+                aria-label="清空搜索"
+                className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                onClick={() => setQuery("")}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </DockTooltip>
           )}
         </div>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          className="shrink-0"
-          title={
+        <DockTooltip
+          content={
             sortBy === "count"
-              ? "当前按引用次数排序，点击改为按名称"
-              : "当前按名称排序，点击改为按引用次数"
+              ? "按引用次数排序 · 点击改为按名称"
+              : "按名称排序 · 点击改为按引用次数"
           }
-          onClick={() => setSortBy((s) => (s === "count" ? "name" : "count"))}
+          wrapperClassName="shrink-0"
         >
-          {sortBy === "count" ? <ArrowDownNarrowWide /> : <ArrowDownAZ />}
-        </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label={sortBy === "count" ? "改为按名称排序" : "改为按引用次数排序"}
+            onClick={() => setSortBy((s) => (s === "count" ? "name" : "count"))}
+          >
+            {sortBy === "count" ? <ArrowDownNarrowWide /> : <ArrowDownAZ />}
+          </Button>
+        </DockTooltip>
       </div>
 
       {/* 图块表 */}
       <div className="min-h-0 flex-1 border-t">
         <ScrollArea className="h-full">
           <table
-            className="w-full table-fixed text-sm"
+            className="w-full table-fixed text-xs"
             style={{ fontFamily: '"Microsoft YaHei", "微软雅黑", "PingFang SC", sans-serif' }}
           >
             <thead className="sticky top-0 z-10 bg-card shadow-[0_1px_0_var(--border)]">
-              <tr className="text-xs text-muted-foreground">
+              <tr className="text-[11px] text-muted-foreground">
                 <th className="whitespace-nowrap py-2 pl-4 text-left font-medium">
                   图块名
                 </th>
-                <th className="w-16 whitespace-nowrap py-2 text-right font-medium">
-                  引用
-                </th>
                 <th className="w-16 whitespace-nowrap py-2 pr-4 text-right font-medium">
-                  实体
+                  数量
                 </th>
               </tr>
             </thead>
@@ -165,12 +167,13 @@ export default function BlocksTab({
                   >
                     <td className="py-1.5 pl-4 pr-2">
                       <div className="min-w-0">
-                        <div
-                          className="truncate font-sans text-sm font-medium tracking-tight"
-                          title={b.name}
+                        <FollowTooltip
+                          content={b.name}
+                          focusable
+                          wrapperClassName="block max-w-full truncate rounded-sm text-xs font-medium tracking-tight focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30"
                         >
                           {b.name}
-                        </div>
+                        </FollowTooltip>
                         {missingDef && (
                           <div className="truncate text-[11px] leading-4 text-muted-foreground/70">
                             定义不在本图
@@ -178,18 +181,8 @@ export default function BlocksTab({
                         )}
                       </div>
                     </td>
-                    <td
-                      className="py-2 text-right text-sm font-medium tabular-nums"
-                      title={
-                        b.anonymousRefCount
-                          ? `其中 ${b.anonymousRefCount} 个来自动态块实例`
-                          : undefined
-                      }
-                    >
+                    <td className="py-1.5 pr-4 text-right text-xs font-medium tabular-nums">
                       {formatNumber(b.refCount)}
-                    </td>
-                    <td className="py-2 pr-4 text-right text-sm tabular-nums text-muted-foreground">
-                      {formatNumber(b.entityCount)}
                     </td>
                   </tr>
                 );
@@ -197,7 +190,7 @@ export default function BlocksTab({
               {filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={3}
+                    colSpan={2}
                     className="py-6 text-center text-xs text-muted-foreground"
                   >
                     没有匹配「{query}」的图块

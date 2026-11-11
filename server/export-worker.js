@@ -63,7 +63,13 @@ try {
   cleanup();
   process.send({
     type: "error",
-    error: e instanceof Error ? e.message : String(e),
+    ...(e && e.code === "TOO_LARGE" ? { code: "TOO_LARGE" } : {}),
+    error:
+      e && e.code === "TOO_LARGE"
+        ? "图纸过大，暂不支持矢量 PDF 导出"
+        : e instanceof Error
+          ? e.message
+          : String(e),
   });
   process.exitCode = 1;
 }

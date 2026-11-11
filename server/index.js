@@ -7,10 +7,25 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveCliPath, CadcraftCli } from "./cadcraft.js";
-import { detectTch } from "./tch-detect.js";
+import { detectUdo as detectUdoDxf } from "./udo-detect.js";
+import { attachUdoCli, UDO_DUMP_FILE, resolveUdoCli } from "./udo-convert.js";
 import { scanDxf, aggregateAnonymousBlocks } from "./scanner.js";
-import { DXF_WEB_VERSION, parseFocus } from "./dxf-web.js";
-import { fork } from "node:child_process";
+import { DXF_WEB_VERSION, parseFocus, parseSpace, spacesForFile, buildExportDxfSafe } from "./dxf-web.js";
+import { loadEntities } from "./dxf-entities.js";
+import {
+  CURRENT_VERSION,
+  checkForUpdate,
+  downloadAsset,
+  stageUpdate,
+  canSelfUpdate,
+} from "./update.js";
+import { readFontConfig, saveFontConfig, listFontFiles, resolveFontFile } from "./fonts.js";
+import {
+  buildCompareReport,
+  MAX_REPORT_BYTES,
+  REPORT_MIME,
+} from "./compare-report.js";
+import { fork, spawn } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -66,14 +81,14 @@ function lanUrls() {
   return urls;
 }
 /** 缓存格式版本：算法/导出策略变化时 +1，旧缓存自动失效 */
-const CACHE_VERSION = "v14"; // v14: tch 改为分层结构 {level, classes, evidence}（老缓存不兼容）
+const CACHE_VERSION = "v14"; // v14: 自定义对象判定改为分层结构 {level, classes, evidence}（老缓存不兼容）
 /**
  * 统计结果版本（meta.json 里的 statsVersion）。
  * ⚠️ 刻意**不**并入 CACHE_VERSION：块统计新增字段不需要重跑 DWG→DXF，
  *    命中旧缓存时只需拿 outDir/converted.dxf 重扫一遍（09bb 9.4MB 实测 ~300ms）。
  *    v3: 匿名块并回原块（stats.blocks 不再含 anonymous 行；新增 anonymousHiddenCount）。
  */
-const STATS_VERSION = 4; // v4: blocks[] 增加 used 标志 + unusedBlockDefCount（未使用的块定义不在列表显示）
+const STATS_VERSION = 5; // v5: LAYER 标志位修正（70 bit4=锁定，不是 off；off 只认 62<0）
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 /**
@@ -85,21 +100,38 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
  */
 (function cleanOldUploads() {
   const days = Number(process.env.UPLOAD_RETENTION_DAYS ?? 30);
-  if (!Number.isFinite(days) || days <= 0) return;
+  if (!Number.isFinite(days) || days <= 0) {
+    console.log(`[cadviewer] 上传件保留：永久保留（UPLOAD_RETENTION_DAYS=${process.env.UPLOAD_RETENTION_DAYS ?? "0"}），本次未清理`);
+    return;
+  }
   const cutoff = Date.now() - days * 24 * 3600 * 1000;
+  let removed = 0;
+  let failed = 0;
   try {
     for (const name of fs.readdirSync(UPLOAD_DIR)) {
       const p = path.join(UPLOAD_DIR, name);
       try {
         const st = fs.statSync(p);
-        if (st.isFile() && st.mtimeMs < cutoff) fs.unlinkSync(p);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(p);
+          removed++;
+        }
       } catch {
+        failed++;
         /* 单个文件失败不影响其他 */
       }
     }
   } catch {
+    failed++;
     /* 目录读取失败则跳过 */
   }
+  /* 用户已明确「保留策略」：这里只报告，不改策略。排查"图纸怎么没了"时，
+   * 先看这一行就能知道当前保留天数、删了多少、失败多少。 */
+  console.log(
+    `[cadviewer] 上传件保留 ${days} 天：本次清理 ${removed} 个过期文件` +
+      (failed ? `（${failed} 个失败）` : "") +
+      `，目录 ${UPLOAD_DIR}`
+  );
 })();
 
 const cliPath = resolveCliPath(PROJECT_ROOT);
@@ -108,7 +140,15 @@ console.log(`[cadviewer] cadcraft-cli: ${cliPath || "未找到（bin/ 下无 exe
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+/**
+ * 默认 JSON 只有 2MB，但对比报告带着几十上百张截图。
+ * 报告路由在下面单独挂 200MB parser；这里必须放行它，否则会先被 2MB 拦掉。
+ */
+const jsonSmall = express.json({ limit: "2mb" });
+app.use((req, res, next) => {
+  if (req.path === "/api/compare/report") return next();
+  return jsonSmall(req, res, next);
+});
 
 /**
  * 活动时间戳：用于"空闲自动退出"。
@@ -192,10 +232,12 @@ async function processDrawing(absPath, originalName) {
     try {
       const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
       const cached = { ...meta, outDir };
-      // v13 的 tch 是 {detected, classes}；v14 起是分层结构 {level, classes, evidence}。
+      // v13 的 udo 是 {detected, classes}；v14 起是分层结构 {level, classes, evidence}。
       // 若读到旧结构（无 level 字段）就退化成新结构；缺失则给 none。始终保证字段存在。
-      const t = cached.tch;
-      cached.tch =
+      // 0.3.0 之前这个字段在 meta.json 里叫 tch：过渡期只读兼容（写回时一律用 udo）。
+      const t = cached.udo || cached.tch;
+      delete cached.tch;
+      cached.udo =
         t && typeof t.level === "string"
           ? { level: t.level, classes: t.classes || [], evidence: t.evidence || [] }
           : {
@@ -244,6 +286,32 @@ async function processDrawing(absPath, originalName) {
       } else {
         cached.stats = normalizeStats(cached.stats);
       }
+      /* v51：老缓存补一次"天正洞口"解析。判据放在 attachUdoCli 内部（DWG + 字节预筛命中
+       * + 有二进制 + CLI 成功），这里只负责在真的拿到新信息时回写 meta.json。
+       * 命中不到（绝大多数图纸）时 attachUdoCli 原样返回同一个对象，不做任何写盘。 */
+      if (cached.format === "DWG" && cached.path && !(cached.udo?.entities > 0)) {
+        const prevUdo = cached.udo;
+        try {
+          const enriched = await attachUdoCli({
+            udo: prevUdo,
+            dwgPath: cached.path,
+            outDir,
+          });
+          if (enriched !== prevUdo) {
+            cached.udo = enriched;
+            try {
+              fs.writeFileSync(
+                metaPath,
+                JSON.stringify({ ...cached, outDir: undefined }, null, 2)
+              );
+            } catch {
+              /* 回写失败不影响本次开图 */
+            }
+          }
+        } catch {
+          /* 天正解析失败绝不影响开图 */
+        }
+      }
       openFiles.set(id, cached);
       return cached;
     } catch {
@@ -265,8 +333,17 @@ async function processDrawing(absPath, originalName) {
         : cli.toDxf(absPath, path.join(outDir, "converted.dxf")),
     ]);
     const skippedEntities = info?.skipped?.count || 0;
-    // 天正（TCH_*）检测：分层判定 —— 先确证「扫描用 DXF」的 CLASSES 段，再看 info 里的制作痕迹
-    const tch = detectTch({ dxfPath: dxfForScan, info });
+    // 自定义对象（TCH_* / AEC_* 等 DXF 类名）检测：分层判定 —— 先确证「扫描用 DXF」的 CLASSES 段，再看 info 里的制作痕迹
+    const udoDxf = detectUdoDxf({ dxfPath: dxfForScan, info });
+    /* v51：DWG 原生自定义对象洞口。cadcraft 的 DXF 会静默丢弃自定义对象，所以这里额外让
+     * `udo-cli` 读一遍 DWG，把洞口计数并进 udo，并把 dump 落盘给 web DXF 构建用。
+     * 非 DWG / 字节预筛未命中 / 没有二进制 / 超时 → 原样返回（不影响开图，也不写缓存）。
+     * 与下面的 scanDxf 并行跑：天正解析（样张 7s）本来就是这个量级，不额外拉长开图。 */
+    const udoTask = attachUdoCli({
+      udo: udoDxf,
+      dwgPath: ext === ".dxf" ? null : absPath,
+      outDir,
+    });
 
     // 第二段：流式扫描统计（产出主体范围 coreExtents）
     let stats = null;
@@ -321,6 +398,9 @@ async function processDrawing(absPath, originalName) {
     }
     stats = normalizeStats(stats);
 
+    // 天正解析与扫描并行：这里才等它（失败的实现自己会退化成原对象，不抛）
+    const udo = await udoTask;
+
     const st = fs.statSync(absPath);
     const record = {
       id,
@@ -334,7 +414,7 @@ async function processDrawing(absPath, originalName) {
       stats,
       statsVersion: STATS_VERSION,
       skippedEntities,
-      tch,
+      udo,
       cadcraftInfo: info
         ? {
             version: info.title,
@@ -364,9 +444,12 @@ async function processDrawing(absPath, originalName) {
 
 // ---- 健康检查 ----
 app.get("/api/health", async (_req, res) => {
+  /* 自定义对象解析组件（udo-cli）的解析结果：相对项目根展示，便于确认用的是哪一份二进制。 */
+  const udoCli = resolveUdoCli(PROJECT_ROOT);
   res.json({
     ok: true,
     cli: cli ? { path: cliPath, version: await cli.version() } : null,
+    udoCli: udoCli ? path.relative(PROJECT_ROOT, udoCli).replace(/\\/g, "/") : null,
     // 让 CLI / 别的 agent 知道这份服务绑在哪个地址、能不能从别的机器访问
     host: HOST,
     port: PORT,
@@ -431,6 +514,14 @@ app.post("/api/open", upload.single("file"), async (req, res) => {
     }
 
     const rec = await processDrawing(absPath, name);
+    /* 模型 / 布局页签（v34）：`模型` + 每个 LAYOUT 名。解析失败只退回模型页。 */
+    let spaces = [{ id: "model", name: "模型" }];
+    try {
+      const spaceSrc = rawSourceDxf(rec);
+      if (spaceSrc) spaces = spacesForFile(spaceSrc);
+    } catch {
+      /* 页签拿不到不影响开图 */
+    }
     res.json({
       id: rec.id,
       name: rec.name,
@@ -439,9 +530,10 @@ app.post("/api/open", upload.single("file"), async (req, res) => {
       statsOk: rec.statsOk,
       statsError: rec.statsError,
       stats: rec.stats,
+      spaces,
       skippedEntities: rec.skippedEntities,
-      /** 天正（TCH_*）分层检测结果；始终给出对象，检测失败/不适用时为 { level:"none", classes:[], evidence:[] } */
-      tch: rec.tch || { level: "none", classes: [], evidence: [] },
+      /** 自定义对象（TCH_*）分层检测结果；始终给出对象，检测失败/不适用时为 { level:"none", classes:[], evidence:[] } */
+      udo: rec.udo || { level: "none", classes: [], evidence: [] },
       cadcraftInfo: rec.cadcraftInfo,
       /** 派生数据（DXF 预处理）的版本号：前端要拼进 URL 做缓存失效键 */
       dxfVersion: DXF_WEB_VERSION,
@@ -452,6 +544,187 @@ app.post("/api/open", upload.single("file"), async (req, res) => {
   }
 });
 
+/* ─────────────────── 图纸比对 ───────────────────
+ * 两份已打开图纸的模型空间实体做几何比对（契约见 docs/compare-contract.md）。
+ * · 引擎 compare.js 依赖 shared/geometry 内核，所以**按需动态加载**：
+ *   内核缺失/损坏时服务照常启动，只有比对请求报错，不会拖垮其他功能。
+ * · 并发去重沿用 webDxfJobs/exportPdfJobs 的写法；结果按「图纸对 + 选项」缓存 8 份。
+ */
+const COMPARE_CACHE_MAX = 8;
+const COMPARE_CACHE_TTL_MS = 5 * 60 * 1000;
+const compareJobs = new Map();
+const compareCache = new Map();
+let compareEnginePromise = null;
+/** 引擎动态加载（一次成功即复用；失败不缓存，内核修好后无需重启即可重试） */
+const loadCompareEngine = () => {
+  if (!compareEnginePromise) {
+    compareEnginePromise = import("./compare.js").catch((e) => {
+      compareEnginePromise = null;
+      throw e;
+    });
+  }
+  return compareEnginePromise;
+};
+
+/** 归一化请求选项：数字夹取、布尔收紧，非法值一律回落到契约默认 */
+function normalizeCompareOptions(input) {
+  const o = input && typeof input === "object" ? input : {};
+  const num = (v, d, min, max) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : d;
+  };
+  const props = Array.isArray(o.compareProps)
+    ? o.compareProps.map(String).slice(0, 8)
+    : ["color", "layer", "linetype", "lineweight"];
+  return {
+    tolerance: num(o.tolerance, 0.001, 0, 1e12),
+    quantize: num(o.quantize, 1e-6, 1e-12, 1),
+    compareProps: props,
+    includeHatch: o.includeHatch === true,
+    maxChanges: Math.floor(num(o.maxChanges, 5000, 0, 100000)),
+  };
+}
+
+app.post("/api/compare", async (req, res) => {
+  try {
+    const baseId = String(req.body?.base ?? "");
+    const targetId = String(req.body?.target ?? "");
+    const recA = openFiles.get(baseId);
+    if (!recA) return res.status(404).json({ error: `图纸未打开: ${baseId || "(空)"}` });
+    const recB = openFiles.get(targetId);
+    if (!recB) return res.status(404).json({ error: `图纸未打开: ${targetId || "(空)"}` });
+
+    /* 比对用**未注入**的源几何：和改造前的行为保持一致（注入只影响导出 DXF/PDF），
+     * 也避免一次比对为了几层天正对象先付出整份导出 DXF 的构建成本。 */
+    const srcA = rawSourceDxf(recA);
+    const srcB = rawSourceDxf(recB);
+    if (!srcA || !srcB) {
+      return res.status(409).json({ error: "该图纸没有可用的 DXF 源，无法比对" });
+    }
+
+    const options = normalizeCompareOptions(req.body?.options);
+    const key = `${recA.id}|${recB.id}|${JSON.stringify(options)}`;
+
+    const cached = compareCache.get(key);
+    if (cached && Date.now() - cached.at < COMPARE_CACHE_TTL_MS) {
+      compareCache.delete(key); // 刷新 LRU 次序
+      compareCache.set(key, cached);
+      return res.json(cached.payload);
+    }
+    if (cached) compareCache.delete(key);
+
+    let job = compareJobs.get(key);
+    if (!job) {
+      job = (async () => {
+        const startedAt = Date.now();
+        const [{ compareEntities }, a, b] = await Promise.all([
+          loadCompareEngine(),
+          loadEntities(srcA),
+          loadEntities(srcB),
+        ]);
+        // 两侧解析器丢弃的实体计数合并后交给引擎（HATCH/LEADER…）
+        const skippedTypes = {};
+        for (const m of [a.skippedTypes, b.skippedTypes]) {
+          for (const [t, n] of Object.entries(m || {})) {
+            skippedTypes[t] = (skippedTypes[t] || 0) + n;
+          }
+        }
+        const core = compareEntities(a.entities, b.entities, {
+          ...options,
+          blocksA: a.dxf?.blocks || {},
+          blocksB: b.dxf?.blocks || {},
+          skippedTypes,
+        });
+        const elapsedMs = Date.now() - startedAt;
+        // 抽取阶段的告警（图纸空间跳过）与引擎告警合并，同 code/name/type/reason 累加 count
+        const seen = new Map();
+        for (const w of [...a.warnings, ...b.warnings, ...core.warnings]) {
+          const k = `${w.code}|${w.name || ""}|${w.type || ""}|${w.reason || ""}`;
+          const prev = seen.get(k);
+          if (prev) {
+            if (w.count) prev.count = (prev.count || 0) + w.count;
+          } else {
+            seen.set(k, { ...w });
+          }
+        }
+        console.log(
+          `[cadviewer] compare ${recA.id} vs ${recB.id}: added=${core.summary.added} removed=${core.summary.removed} modified=${core.summary.modified} in ${elapsedMs}ms`
+        );
+        return {
+          base: { id: recA.id, name: recA.name },
+          target: { id: recB.id, name: recB.name },
+          summary: { ...core.summary, elapsedMs },
+          changes: core.changes,
+          changeSets: core.changeSets,
+          warnings: [...seen.values()],
+        };
+      })();
+      compareJobs.set(key, job);
+      // 无论成败都要释放 job；用 then 的拒绝分支而不是 finally，避免产生未处理的 rejection
+      job.then(
+        () => compareJobs.delete(key),
+        () => compareJobs.delete(key)
+      );
+    }
+
+    const payload = await job;
+    compareCache.set(key, { at: Date.now(), payload });
+    while (compareCache.size > COMPARE_CACHE_MAX) {
+      compareCache.delete(compareCache.keys().next().value);
+    }
+    return res.json(payload);
+  } catch (e) {
+    console.error("[cadviewer] compare failed:", e);
+    return res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+/* ─────────────────── 图纸对比 Word 报告 ───────────────────
+ * 图片由前端截好并画好云线（base64 PNG），这里只排版。
+ * 单独挂一个 200MB 的 JSON parser：报告可能带几百张截图，默认 2MB 不够。
+ */
+const reportJson = express.json({ limit: MAX_REPORT_BYTES });
+app.post(
+  "/api/compare/report",
+  (req, res, next) => {
+    reportJson(req, res, (err) => {
+      if (!err) return next();
+      if (err.type === "entity.too.large") {
+        return res.status(413).json({
+          error: `报告请求超过 ${Math.round(
+            MAX_REPORT_BYTES / 1024 / 1024
+          )}MB 上限，请减少单次导出的变更数`,
+        });
+      }
+      return res
+        .status(400)
+        .json({ error: `报告请求解析失败：${err.message || String(err)}` });
+    });
+  },
+  async (req, res) => {
+    try {
+      const { buffer, fileName, normalized } = await buildCompareReport(req.body);
+      console.log(
+        `[cadviewer] compare report: ${normalized.totalChanges} changes / ${normalized.sets.length} sets / ${buffer.length} bytes`
+      );
+      res.setHeader("Content-Type", REPORT_MIME);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+      );
+      res.setHeader("Content-Length", String(buffer.length));
+      res.setHeader("Cache-Control", "no-store");
+      return res.end(buffer);
+    } catch (e) {
+      if (e?.statusCode === 400) {
+        return res.status(400).json({ error: e.message });
+      }
+      console.error("[cadviewer] compare report failed:", e);
+      return res.status(500).json({ error: e.message || String(e) });
+    }
+  }
+);
+
 /* ─────────────────── WebGL 引擎（DXF 直读）───────────────────
  * 用 dxf-viewer 在浏览器里直读 DXF，服务端只做两件预处理（见 dxf-web.js）：
  * 解 `\U+XXXX` 转义、把 ACAD_TABLE 的网格与单元格文字注回成原生实体。
@@ -460,19 +733,38 @@ app.post("/api/open", upload.single("file"), async (req, res) => {
 /** 聚焦变体单独一份产物：文件名带 focus 的短哈希（图层/图块名含中文，不能直接当文件名）。 */
 const focusHash = (focus) =>
   crypto.createHash("sha1").update(focus.spec).digest("hex").slice(0, 8);
-const webDxfPath = (rec, focus) =>
-  path.join(rec.outDir, `web-v${DXF_WEB_VERSION}${focus ? `-focus-${focusHash(focus)}` : ""}.dxf`);
+/** 空间变体（v34）：模型空间固定后缀 `-space-model`；布局名含中文，用短哈希。 */
+const spaceHash = (space) =>
+  crypto.createHash("sha1").update(space.spec).digest("hex").slice(0, 8);
+const spaceSuffix = (space) =>
+  !space ? "" : space.kind === "model" ? "-space-model" : `-space-${spaceHash(space)}`;
+/** 图外散点过滤关闭的变体（v61）：默认开，关掉时单独缓存，避免互相覆盖。 */
+const straySuffix = (stray) => (stray === false ? "-nostray" : "");
+const webDxfPath = (rec, focus, space, stray = true) =>
+  path.join(
+    rec.outDir,
+    `web-v${DXF_WEB_VERSION}${spaceSuffix(space)}${straySuffix(stray)}${
+      focus ? `-focus-${focusHash(focus)}` : ""
+    }.dxf`
+  );
 const webDxfJobs = new Map();
-/** 普通产物与每个聚焦变体各自一条 job 链 */
-const webDxfKey = (rec, focus) => `${rec.id}|${focus ? focus.spec : ""}`;
+/** 普通产物与每个聚焦/空间变体各自一条 job 链 */
+const webDxfKey = (rec, focus, space, stray = true) =>
+  `${rec.id}|${space ? space.spec : ""}|${focus ? focus.spec : ""}|${stray === false ? "nostray" : "stray"}`;
 
 /* ─────────────────── 导出（原始 DXF / 矢量 PDF）───────────────────
- * · 原始 DXF 与 PDF 的源文件相同：DWG → converted.dxf；DXF → 源文件本身。
- *   ⚠️ 绝不能复用 web DXF（web-vN.dxf 删了 ATTRIB、展平块文字、重画表格）。
+ * · 导出源（v66）：DWG → converted.dxf **再注入天正几何与代理图形** → `export-v<DXF_WEB_VERSION>.dxf`；
+ *   DXF → 源文件同样过一遍注入管线。`?raw=1` 下载与 PDF 共用这一份。
+ *   ⚠️ 绝不能复用 web DXF（web-vN.dxf 删了 ATTRIB、展平块文字、重画表格、还做了单线笔画化）。
+ *   ⚠️ 也绝不能直接用 converted.dxf：cadcraft 会静默丢掉天正自定义对象（门/窗/墙/文字/尺寸）。
  * · PDF 构建链在 export-worker.js 子进程里跑：cadcraft convert → SVG → svg-pdf.js。
  */
-/** 导出产物版本：转换规则/布局变化时 +1，文件名自带版本，旧缓存自然不会命中 */
-const EXPORT_VERSION = 1;
+/** 导出产物版本：转换规则/布局变化时 +1，文件名自带版本，旧缓存自然不会命中。
+ *  v3（2026-11-11）：PDF 取景改用稳健内容 bbox + 高精度 CTM（修缩放/裁切）；
+ *  导出源换成 v67（几何级 XCLIP 裁剪）。旧 export-v2.pdf 必须整体失效。
+ *  v2（2026-11-11）：PDF/DXF 的源改成 `export-v<DXF_WEB_VERSION>.dxf`（带天正注入），
+ *  旧 export-v1.pdf 是缺门/窗/墙的产物，必须整体失效。 */
+const EXPORT_VERSION = 3;
 const PDF_MAX_SRC_MB = Number(process.env.PDF_MAX_SRC_MB) || 120;
 const PDF_MAX_SVG_MB = Number(process.env.PDF_MAX_SVG_MB) || 600;
 
@@ -480,14 +772,132 @@ const exportSvgPath = (rec) =>
   path.join(rec.outDir, `export-v${EXPORT_VERSION}.svg`);
 const exportPdfPath = (rec) =>
   path.join(rec.outDir, `export-v${EXPORT_VERSION}.pdf`);
+/** 导出专用 DXF（含自定义对象注入）：版本号跟 DXF_WEB_VERSION 走，注入规则一变就自动失效。 */
+const exportDxfPath = (rec) =>
+  path.join(rec.outDir, `export-v${DXF_WEB_VERSION}.dxf`);
 
-/** 导出的源 DXF：DWG 用 converted.dxf，DXF 用原始路径；不存在返回 null */
-function exportSourceDxf(rec) {
+/**
+ * 自定义对象 dump 的路径（没有 → 空串，worker 会按源 DWG 自己兜底解码）。
+ * 优先新文件名 `udo-dump.json`；0.3.0 之前的旧缓存里记的是 `tch-dump.json`，过渡期回退只读。
+ */
+function udoDumpPathOf(rec) {
+  const fresh = path.join(rec.outDir, UDO_DUMP_FILE);
+  if (fs.existsSync(fresh)) return fresh;
+  const legacyName = rec.udo?.dumpFile;
+  if (legacyName) {
+    const legacy = path.join(rec.outDir, legacyName);
+    if (fs.existsSync(legacy)) return legacy;
+  }
+  return "";
+}
+
+/** 未做任何注入的原始源：DWG → converted.dxf；DXF → 上传/本地源文件。 */
+function rawSourceDxf(rec) {
   if (rec.format === "DXF") {
     return rec.path && fs.existsSync(rec.path) ? rec.path : null;
   }
   const converted = path.join(rec.outDir, "converted.dxf");
   return fs.existsSync(converted) ? converted : null;
+}
+
+/** 导出 DXF 构建去重：id → job（building/ready/error），照 webDxfJobs 的写法 */
+const exportDxfJobs = new Map();
+
+/**
+ * 导出专用 DXF：converted.dxf + 天正注入 + 代理图形（见 dxf-web.js 的 buildExportDxf）。
+ *
+ * ⚠️ 为什么不能直接用 converted.dxf：cadcraft 把 DWG 转 DXF 时会静默丢掉天正自定义
+ * 对象，实测 `智能化图纸` 的 DOOR_FIRE/WINDOW/LATRINE 三层实体数为 0，导出的 DXF/PDF
+ * 因此缺门、窗、墙、房间名。屏幕端早已注入，导出端必须补齐。
+ *
+ * 失败策略：构建抛任何异常 → 回退 rawSourceDxf() 并记 warning，绝不让下载/PDF 报错。
+ * 缓存：`export-v<DXF_WEB_VERSION>.dxf`；DXF_WEB_VERSION 一升，文件名变化即失效。
+ */
+function ensureExportDxf(rec) {
+  const hit = exportDxfJobs.get(rec.id);
+  if (hit?.status === "building") return hit;
+  if (hit?.status === "ready" && hit.path && fs.existsSync(hit.path)) return hit;
+  /* 构建失败的结论也缓存住：回退路径仍在就直接用，避免每次下载都重跑一遍注入。 */
+  if (hit?.status === "error" && hit.path && fs.existsSync(hit.path)) return hit;
+  const out = exportDxfPath(rec);
+  if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+    const job = {
+      status: "ready",
+      path: out,
+      bytes: fs.statSync(out).size,
+      cached: true,
+    };
+    exportDxfJobs.set(rec.id, job);
+    return job;
+  }
+
+  const fallback = rawSourceDxf(rec);
+  const job = { status: "building", fallback };
+  exportDxfJobs.set(rec.id, job);
+  if (!fallback) {
+    Object.assign(job, { status: "error", path: null, error: "缺少可用的 DXF 源文件" });
+    return job;
+  }
+
+  const tmp = `${out}.tmp`;
+  job.promise = (async () => {
+    const r = await buildExportDxfSafe({
+      srcPath: fallback,
+      outPath: tmp,
+      fallbackPath: fallback,
+      options: {
+        udoDumpPath: udoDumpPathOf(rec),
+        udoSourcePath: rec.format === "DXF" ? "" : rec.path || "",
+        contentBox: rec.stats?.contentBox ?? null,
+      },
+      onWarning: (e) => {
+        console.warn(
+          `[cadviewer] 导出 DXF 注入失败，回退原始源 ${rec.id}（${path.basename(fallback)}）: ${e.message}`
+        );
+      },
+    });
+    if (r.built) {
+      try {
+        fs.renameSync(tmp, out);
+        Object.assign(job, {
+          status: "ready",
+          path: out,
+          bytes: fs.statSync(out).size,
+          ...r.stats,
+        });
+        console.log(
+          `[cadviewer] 导出 DXF ${rec.id}: ${job.bytes}B udo=${r.stats.udoInjected}(${r.stats.udoPrimitives} 图元)` +
+            ` proxy=${r.stats.proxyConverted} tables=${r.stats.tables}` +
+            ` xclip=${r.stats.clipFilters||0}块/删${r.stats.droppedEntities||0}实体` +
+            (r.stats.skippedMultiRef ? ` 跳过共享块${r.stats.skippedMultiRef}` : "")
+        );
+      } catch (e) {
+        Object.assign(job, { status: "error", path: fallback, error: e.message });
+      }
+    } else {
+      Object.assign(job, {
+        status: "error",
+        path: fallback,
+        error: r.error || "导出 DXF 构建失败",
+        fallback: true,
+      });
+    }
+  })();
+  return job;
+}
+
+/** 导出的源 DXF：优先用注入后的 export-vN.dxf；构建失败回退原始 converted.dxf / 源文件。 */
+async function exportSourceDxf(rec) {
+  const job = ensureExportDxf(rec);
+  if (job.status === "building" && job.promise) {
+    try {
+      await job.promise;
+    } catch {
+      /* 状态已经写进 job */
+    }
+  }
+  if (job.path && fs.existsSync(job.path)) return job.path;
+  return rawSourceDxf(rec);
 }
 
 /** PDF 并发去重：id → job（building/ready/error），照 webDxfJobs 的写法 */
@@ -512,30 +922,32 @@ function ensureExportPdf(rec) {
   const job = { status: "building" };
   exportPdfJobs.set(rec.id, job);
 
-  const src = exportSourceDxf(rec);
-  if (!src) {
-    Object.assign(job, {
-      status: "error",
-      statusCode: 404,
-      error: "缺少可用的 DXF 源文件",
-    });
-    return job;
-  }
-
-  // 大图保护：超限直接 413，不启动转换
-  const srcBytes = fs.statSync(src).size;
-  if (srcBytes > PDF_MAX_SRC_MB * 1024 * 1024) {
-    Object.assign(job, {
-      status: "error",
-      statusCode: 413,
-      error: "图纸过大，暂不支持矢量 PDF 导出",
-    });
-    return job;
-  }
-
   const windowBox = rec.stats?.contentBox ?? rec.stats?.coreExtents ?? null;
   job.promise = (async () => {
     try {
+      /* 源 DXF 可能要先构建（天正注入），所以整段放在 promise 里；
+       * 构建失败时 exportSourceDxf 已回退原始源，这里照常出 PDF。 */
+      const src = await exportSourceDxf(rec);
+      if (!src) {
+        Object.assign(job, {
+          status: "error",
+          statusCode: 404,
+          error: "缺少可用的 DXF 源文件",
+        });
+        return;
+      }
+
+      // 大图保护：超限直接 413，不启动转换
+      const srcBytes = fs.statSync(src).size;
+      if (srcBytes > PDF_MAX_SRC_MB * 1024 * 1024) {
+        Object.assign(job, {
+          status: "error",
+          statusCode: 413,
+          error: "图纸过大，暂不支持矢量 PDF 导出",
+        });
+        return;
+      }
+
       const stats = await new Promise((resolve, reject) => {
         const child = fork(
           path.join(__dirname, "export-worker.js"),
@@ -615,6 +1027,7 @@ function ensureExportPdf(rec) {
   return job;
 }
 
+
 /**
  * 聚焦名字集合：列表里的"原块"可能吞并了匿名表示块（*U8…），
  * 双击原块时必须把这些 INSERT 名字一起传给 applyFocus，否则一个都高亮不了。
@@ -627,16 +1040,19 @@ function focusWithNames(rec, focus) {
   return { ...focus, names: [...new Set([focus.name, ...extra])] };
 }
 
-function ensureWebDxf(rec, focus) {
-  focus = focusWithNames(rec, focus);
-  const key = webDxfKey(rec, focus);
+function ensureWebDxf(rec, focus, space, stray = true) {
+  /* 布局空间不参与图层/图块聚焦（纸张空间没有模型图层高亮的概念）：
+   * 直接丢弃 focus，既避免生成 "同一布局 × 每个聚焦" 的无用变体，也让缓存可复用。 */
+  if (space && space.kind === "layout") focus = null;
+  else focus = focusWithNames(rec, focus);
+  const key = webDxfKey(rec, focus, space, stray);
   const hit = webDxfJobs.get(key);
   /* ⚠️ 必须同时确认**文件还在**：运行中清掉缓存（或手动删掉某个聚焦变体）时，
    *    内存里仍记着 status:"ready"；只信它就会一直返回"就绪"而文件已不存在，
    *    该 URL 会持续 404 直到重启。实测踩过。 */
-  if (hit?.status === "ready" && fs.existsSync(webDxfPath(rec, focus))) return hit;
+  if (hit?.status === "ready" && fs.existsSync(webDxfPath(rec, focus, space, stray))) return hit;
   if (hit?.status === "building") return hit;
-  const out = webDxfPath(rec, focus);
+  const out = webDxfPath(rec, focus, space, stray);
   if (fs.existsSync(out)) {
     const job = { status: "ready", bytes: fs.statSync(out).size };
     webDxfJobs.set(key, job);
@@ -655,7 +1071,23 @@ function ensureWebDxf(rec, focus) {
     try {
       if (!src || !fs.existsSync(src)) throw new Error("缺少可用的 DXF 源文件");
       const stats = await new Promise((resolve, reject) => {
-        const child = fork(path.join(__dirname, "dxf-web-worker.js"), [src, out, rec.path || "", focus ? focus.spec : "", focus?.names ? JSON.stringify(focus.names) : ""], {
+        /* 第七个参数：meta.json 的 stats.contentBox。DXF 直开时 src 是 data/uploads/*.dxf，
+         * 源文件旁没有 meta.json，worker 自己读不到 → filterFlatTexts 失效（v50）。 */
+        const cboxJson = rec.stats?.contentBox ? JSON.stringify(rec.stats.contentBox) : "";
+        /* 第八个参数：自定义对象 dump（v51）。开图时 attachUdoCli 已经落盘到
+         * `<outDir>/udo-dump.json`；没有就传空串，worker 会按源 DWG 自己兜底解码。 */
+        const args = [
+          src,
+          out,
+          rec.path || "",
+          focus ? focus.spec : "",
+          focus?.names ? JSON.stringify(focus.names) : "",
+          space ? space.spec : "",
+          cboxJson,
+          udoDumpPathOf(rec),
+          stray === false ? "0" : "1",
+        ];
+        const child = fork(path.join(__dirname, "dxf-web-worker.js"), args, {
           stdio: ["ignore", "ignore", "inherit", "ipc"],
           // SVG 的 LOD/瓦片安全网移除后，大图预处理全靠这条 worker（默认堆可能不够）。
           // 可用 DXF_WEB_MAX_MB 覆盖。
@@ -689,10 +1121,12 @@ function ensureWebDxf(rec, focus) {
 app.get("/api/file/:id/dxf", async (req, res) => {
   const rec = openFiles.get(req.params.id);
   if (!rec) return res.status(404).json({ error: "图纸未打开" });
-  /* 原始 DXF 下载（?raw=1）：给用户在 CAD 里打开用，必须是未预处理的源文件。
-   * 下面的无 raw 分支继续返回 web DXF（ATTRIB 删除、块文字展平、表格重画）。 */
+  /* 原始 DXF 下载（?raw=1）：给用户在 CAD 里打开用。
+   * v66 起返回**导出专用 DXF**：在 converted.dxf 基础上注入天正几何（门/窗/墙/文字/尺寸）
+   * 与 310 代理图形，但保留 ATTRIB/块文字/原生文字（不做 WebGL 专用的单线化/展开）。
+   * 注入失败会回退到 converted.dxf / 原始 DXF，下载绝不报错。 */
   if (req.query.raw === "1") {
-    const src = exportSourceDxf(rec);
+    const src = await exportSourceDxf(rec);
     if (!src) return res.status(404).json({ error: "DXF 文件不存在" });
     const st = fs.statSync(src);
     const base = rec.name || path.basename(rec.path || src);
@@ -709,11 +1143,16 @@ app.get("/api/file/:id/dxf", async (req, res) => {
   }
   // 聚焦（双击图层/图块亮显）：非法串一律当"无聚焦"，绝不影响开图
   const focus = parseFocus(req.query.focus);
+  // 模型 / 布局空间（v34）：`space=model` | `space=layout:<布局名>`；非法串当没传
+  const space = parseSpace(req.query.space);
+  /* 图外散点过滤（v61）：默认开；`?stray=0` 关闭（产物单独缓存为 `-nostray`）。 */
+  const stray = !["0", "off", "false"].includes(String(req.query.stray ?? "").toLowerCase());
   if (req.query.status === "1") {
-    const job = ensureWebDxf(rec, focus);
+    const job = ensureWebDxf(rec, focus, space, stray);
     return res.json({
       status: job.status,
       focus: focus ? focus.spec : null,
+      space: space ? space.spec : null,
       focusMuted: job.focusMuted ?? null,
       focusKept: job.focusKept ?? null,
       bytes: job.bytes ?? null,
@@ -723,7 +1162,7 @@ app.get("/api/file/:id/dxf", async (req, res) => {
       error: job.error || null,
     });
   }
-  const job = ensureWebDxf(rec, focus);
+  const job = ensureWebDxf(rec, focus, space, stray);
   // 首次请求就地等构建完成（子进程在跑，主线程不堵），省掉前端的轮询逻辑
   if (job.status === "building" && job.promise) {
     try {
@@ -738,7 +1177,7 @@ app.get("/api/file/:id/dxf", async (req, res) => {
       error: job.error || null,
     });
   }
-  const p = webDxfPath(rec, focus);
+  const p = webDxfPath(rec, focus, space, stray);
   if (!fs.existsSync(p)) return res.status(404).json({ error: "DXF 不存在" });
   res.setHeader("Content-Type", "application/dxf; charset=utf-8");
   res.setHeader("Content-Length", String(fs.statSync(p).size));
@@ -799,6 +1238,68 @@ app.get("/api/file/:id/pdf", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   fs.createReadStream(p).pipe(res);
 });
+
+// ---- 字体目录 / 字体文件（SHX、TTF 等由 fonts.js 统一管理） ----
+/** 当前配置 + 扫描到的字体文件。 */
+app.get("/api/fonts", (_req, res) => {
+  try {
+    const cfg = readFontConfig(PROJECT_ROOT);
+    const limit = 5000;
+    const files = listFontFiles(PROJECT_ROOT, { maxFiles: limit + 1 });
+    const truncated = files.length > limit;
+    res.json({
+      dirs: cfg.dirs,
+      auto: cfg.auto,
+      configured: cfg.configured,
+      files: files
+        .slice(0, limit)
+        .map(({ name, kind, size, dir }) => ({ name, kind, size, dir })),
+      truncated,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "读取字体列表失败" });
+  }
+});
+
+/** 保存用户字体目录：body { dirs: string[], auto?: boolean } */
+app.post("/api/fonts/dirs", (req, res) => {
+  try {
+    const cfg = saveFontConfig(PROJECT_ROOT, {
+      dirs: req.body?.dirs,
+      auto: req.body?.auto,
+    });
+    res.json({ dirs: cfg.dirs, auto: cfg.auto, configured: cfg.configured });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "保存字体目录失败" });
+  }
+});
+
+/**
+ * 回字体原始字节：GET /api/fonts/raw?name=txt.shx
+ * name 只作为"文件名"交给 resolveFontFile，绝不拼进路径；
+ * 目录穿越与目录外文件由 resolveFontFile 的 realpath 检查兜住。
+ */
+app.get("/api/fonts/raw", (req, res) => {
+  const name = typeof req.query.name === "string" ? req.query.name : "";
+  if (!name) return res.status(400).json({ error: "缺少 name 参数" });
+  const p = resolveFontFile(name, PROJECT_ROOT);
+  if (!p) return res.status(404).json({ error: `字体未找到：${name}` });
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return res.status(404).json({ error: `字体未找到：${name}` });
+  }
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Length", String(st.size));
+  res.setHeader("Cache-Control", "no-cache");
+  fs.createReadStream(p).pipe(res);
+});
+
+/**
+ * ⚠️ 已弃用的开发兜底：旧的 /api/font/:name 只认固定白名单里的系统 TTF
+ *    （早期前端硬编码用）。新代码请走 /api/fonts/raw?name=...
+ */
 /** 文字字体（dxf-viewer 只认传进去的 TTF，不看 DXF 里的样式）。
  *  只放行白名单，绝不把任意路径暴露成静态目录。 */
 /**
@@ -825,6 +1326,158 @@ app.get("/api/font/:name", (req, res) => {
   res.setHeader("Content-Type", "font/ttf");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   fs.createReadStream(p).pipe(res);
+});
+
+// ---- 自动更新（便携版自更新） ----
+/* 为什么替换动作要交给外部脚本：Windows 上 node.exe 与 server/*.js 在运行时被占用，
+ * 必须等本进程退出后才能覆盖。所以 /api/update/apply 只负责拉起
+ * scripts/apply-update.ps1（cwd 必须是安装根目录，否则脚本里的 Move-Item server 会失败），
+ * 然后自己退出；真正的备份/覆盖/回滚/重启都在脚本里完成。 */
+const updateState = {
+  /** 最近一次检查结果（含 manifest） */
+  lastCheck: null,
+  /** 当前下载任务：{ version, status: running|ready|error, progress, error, stageDir, startedAt } */
+  job: null,
+};
+
+app.get("/api/update/status", (_req, res) => {
+  const self = canSelfUpdate(PROJECT_ROOT);
+  res.json({
+    current: CURRENT_VERSION,
+    canSelfUpdate: self.ok,
+    reason: self.reason ?? null,
+    root: PROJECT_ROOT,
+    lastCheck: updateState.lastCheck,
+    job: updateState.job,
+  });
+});
+
+app.post("/api/update/check", async (_req, res) => {
+  try {
+    const result = await checkForUpdate({ root: PROJECT_ROOT, timeoutMs: 20000 });
+    updateState.lastCheck = { at: Date.now(), ...result };
+    if (result.error) {
+      console.warn(`[cadviewer] update check failed: ${result.error}`);
+    } else if (result.available) {
+      console.log(`[cadviewer] update available: ${result.current} → ${result.latest}`);
+    }
+    res.json(updateState.lastCheck);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/update/download", (req, res) => {
+  const version = String(req.body?.version ?? "").trim();
+  if (!version) return res.status(400).json({ error: "缺少 version" });
+  if (!/^[0-9A-Za-z.+-]+$/.test(version)) {
+    return res.status(400).json({ error: "version 格式不正确" });
+  }
+
+  const job = updateState.job;
+  if (job && job.status === "running" && job.version === version) return res.json(job);
+
+  const asset = updateState.lastCheck?.manifest?.assets?.update ?? null;
+  if (!asset || !asset.url) {
+    return res.status(409).json({ error: "请先检查更新，当前没有可用的更新包地址" });
+  }
+
+  const next = {
+    version,
+    status: "running",
+    progress: { received: 0, total: asset.size || 0 },
+    error: null,
+    stageDir: null,
+    startedAt: Date.now(),
+  };
+  updateState.job = next;
+
+  (async () => {
+    try {
+      const dl = await downloadAsset({
+        root: PROJECT_ROOT,
+        version,
+        assetUrl: asset.url,
+        sha256: asset.sha256,
+        size: asset.size,
+        onProgress: (p) => {
+          next.progress = p;
+        },
+      });
+      if (!dl.ok) {
+        next.status = "error";
+        next.error = dl.error;
+        console.warn(`[cadviewer] update download failed: ${dl.error}`);
+        return;
+      }
+      const staged = await stageUpdate({ root: PROJECT_ROOT, version, zipPath: dl.path });
+      if (!staged.ok) {
+        next.status = "error";
+        next.error = staged.error || "更新包解压失败";
+        console.warn(`[cadviewer] update stage failed: ${next.error}`);
+        return;
+      }
+      next.stageDir = staged.stageDir;
+      next.status = "ready";
+      console.log(`[cadviewer] update ${version} staged: ${staged.stageDir}`);
+    } catch (e) {
+      next.status = "error";
+      next.error = e.message;
+    }
+  })();
+
+  res.status(202).json(next);
+});
+
+app.post("/api/update/apply", (req, res) => {
+  const job = updateState.job;
+  if (!job || job.status !== "ready" || !job.stageDir) {
+    return res.status(409).json({ error: "没有已就绪的更新包，请先检查并下载" });
+  }
+
+  const self = canSelfUpdate(PROJECT_ROOT);
+  if (!self.ok) {
+    return res.status(409).json({ error: self.reason || "当前安装目录不支持自动更新" });
+  }
+
+  const script = path.join(PROJECT_ROOT, "scripts", "apply-update.ps1");
+  if (!fs.existsSync(script)) {
+    return res.status(500).json({ error: "缺少更新脚本 scripts/apply-update.ps1" });
+  }
+
+  const restart = req.body?.restart === true;
+  const args = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    script,
+    "-Root",
+    PROJECT_ROOT,
+    "-Stage",
+    job.stageDir,
+    "-Pid",
+    String(process.pid),
+  ];
+  if (restart) args.push("-Restart");
+
+  try {
+    const child = spawn("powershell.exe", args, {
+      cwd: PROJECT_ROOT, // 必须是根目录：脚本要 Move-Item server 目录
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    console.log(
+      `[cadviewer] update apply spawned (pid ${child.pid}), version ${job.version}, restart=${restart}`
+    );
+    res.json({ ok: true, version: job.version, restart, pid: child.pid });
+    // 给响应一点时间写回，再退出让脚本接管
+    setTimeout(() => process.exit(0), 500);
+  } catch (e) {
+    res.status(500).json({ error: `无法启动更新脚本：${e.message}` });
+  }
 });
 
 // ---- 最近打开列表 ----

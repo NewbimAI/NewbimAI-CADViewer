@@ -1,12 +1,17 @@
-# CADViewer Skill
+# NewbimAI-CADViewer-Skill
 
-给 agent 用的**纯命令行**图纸工具：读 DWG/DXF、统计图元/图层/图块/文字、判断天正图纸、导出 DXF/SVG/PDF/PNG/JSON。不启动服务、不打开浏览器、不占端口。
+给 agent 用的 CAD 工具：读 DWG/DXF、统计图元、**图纸对比**、**测量**、**自定义对象解析（user-defined object）**、导出 DXF/SVG/PDF/PNG/JSON。
+所有数字都来自产品自己的解析链路（`server/scanner.js`、对比引擎），因此与界面看到的口径一致。
 
-所有数字都来自 CADViewer 产品自己的扫描器（`server/scanner.js`），因此与界面看到的口径一致。唯一入口：
+唯一入口：
 
 ```bash
-node Skill/cadviewer/scripts/cad.mjs <命令> <图纸> [选项]
+node Skill/NewbimAI-CADViewer-Skill/scripts/cad.mjs <命令> [参数]
 ```
+
+- 模型读的说明：`NewbimAI-CADViewer-Skill/SKILL.md`（薄，≤130 行）
+- 机器可读清单：`NewbimAI-CADViewer-Skill/skill.json`（名称/版本/命令/依赖/最低 App 版本）
+- 人读的细节：`NewbimAI-CADViewer-Skill/references/`（`cli` `compare` `measure` `udo` `answering` `api` `troubleshooting`）
 
 ---
 
@@ -14,65 +19,46 @@ node Skill/cadviewer/scripts/cad.mjs <命令> <图纸> [选项]
 
 ```text
 Skill/
-├── README.md                     ← 本文件：用途与注册方式
-├── install.ps1                   ← 一键注册到 OpenCode skills 目录（Windows）
-└── cadviewer/
-    ├── SKILL.md                  ← agent 读的 Skill 说明（给模型看）
+├── README.md                          ← 本文件：安装、打包、体积、边界
+├── install.ps1                        ← Windows 一键安装（目录联接 + 补组件 + doctor）
+├── install.sh                         ← macOS/Linux 对应脚本
+└── NewbimAI-CADViewer-Skill/          ← 注册到 agent 的就是这个目录
+    ├── SKILL.md                       ← 给模型：能力、入口、边界
+    ├── skill.json                     ← 机器可读清单（版本由构建脚本注入）
     ├── scripts/
-    │   └── cad.mjs               ← 唯一 CLI 入口
-    └── references/
-        ├── api.md                ← 运行中服务的 HTTP API
-        ├── answering.md          ← 常见问答的问法/答法/易错口径
-        └── troubleshooting.md    ← 排障
+    │   ├── cad.mjs                    ← 唯一 CLI 入口（参数解析 + 分发）
+    │   ├── manifest.mjs               ← 读 skill.json、解析版本（唯一事实源 server/package.json）
+    │   └── commands/
+    │       ├── compare.mjs            ← 图纸对比（调用本机服务，与界面同引擎）
+    │       ├── measure.mjs            ← 坐标测量（纯算式，可单测）
+    │       └── udo.mjs                ← 自定义对象判定 + 解析覆盖摘要
+    └── references/                    ← cli / compare / measure / udo / answering / api / troubleshooting
 ```
 
 ---
 
-## 依赖（重要）
+## 依赖
 
-> **只需要 Node.js 20+。** 仓库里已带**构建好的前端 `web/dist`**——不要 `npm install`、
-> 不要 `vite build`（那是几分钟的浪费），clone 下来直接能用。
->
-> **轻量分发包**（`release/cadviewer-skill-<ver>.zip`，85KB，给有 3MB 上传限制的 agent 用）
-> 里没有 `web/dist` 与 `server/*.js`：`install.ps1` / `install.sh` 会在安装时自动下载
-> 发布归档并补回，装完同样是完整功能。
+> **只需要 Node.js 20+。** 仓库里已带构建好的前端 `web/dist`——不要 `npm install`、不要 `vite build`。
 
-这个 Skill 本身只是**薄壳**，运行时依赖原仓库里的两样东西：
+| 组件 | 谁需要 | 从哪来 |
+|---|---|---|
+| `server/*.js` | CLI 全部命令 | 仓库自带；轻量包只带 CLI 用到的模块，安装时补全 |
+| `bin/cadcraft/**/cadcraft-cli.exe` | DWG 转换、`svg\|pdf\|png` 导出 | 安装脚本自动下载（约 57MB） |
+| `server/index.js` + `web/dist` | `open` / `serve` / `compare` | 仓库自带；轻量包安装时下载补全（约 18MB） |
+| `bin/udo-cli/udo-cli.exe` | `udo --coverage`（自定义对象解析） | **只在完整包里**；轻量包不含 |
 
-1. **`server/**` 模块**（只读复用）：`cadcraft.js`、`scanner.js`、`tch-detect.js`、`svg-pdf.js` 等。
-   CLI 通过动态 `import()` 从项目根加载它们，**不会**把服务端代码复制进 Skill。
-2. **`bin/cadcraft/**` 转换器**（DWG 必需；`install.ps1` / `install.sh` 会**自动下载并解压**）：
-   上游 **https://github.com/storytold/cadcraft/releases** →
-   `cadcraft-<版本>-windows-x64-portable.zip`（约 57MB，解压后约 127MB），解压到
-   `<项目根>/bin/cadcraft/`，使 `<项目根>/bin/cadcraft/**/cadcraft-cli.exe` 存在。
-   实测 **0.7.0 / 0.8.0** 均兼容（开发时用 0.7.0）；`.gitignore` 已排除该目录。
-   装好放着不占资源——只有打开 DWG / 导出 `svg|pdf|png` 时才会被调用。
+没有 cadcraft：DXF 的统计/文字/图层/图块/对比照常，DWG 与图片/PDF 导出不可用（`doctor` 会点名）。
+没有 udo-cli：其余能力照常，只是不注入自定义对象几何、`doctor` 的 `degraded` 里有 `udo`。
 
-没有 cadcraft（项目根仍满足“存在 `server/scanner.js`”判据——**不要求** `bin/`）时：DXF 的统计/文字/图层/图块仍可用；DWG 转换与 SVG/PDF/PNG 导出不可用（`doctor` 会指出）。
+平台：**Windows 完整功能且已实测**；macOS/Linux 只保证 DXF 只读命令与 `json|dxf` 导出。
 
 ---
 
-## 前置条件与平台支持
-
-**必须与整个 CADViewer 仓库一起使用。** 这个 Skill 只是薄壳，扫描器、DXF 解析、SVG/PDF 导出全部复用仓库里的 `server/**`（见上节）。单独拿走 `Skill/` 文件夹无法运行——连 `doctor` 都会失败，因为它找不到 `server/scanner.js`。
-
-- **`bin/cadcraft/`（Windows 便携版转换器）需单独下载**
-  （https://github.com/storytold/cadcraft/releases ），仓库不含。缺它时 DWG 转换与 `svg|pdf|png` 导出不可用；DXF 的只读命令仍可用。
-- **Windows**：完整功能——DWG 转换、`dxf|svg|pdf|png|json` 导出、`serve` 起界面。
-- **macOS / Linux**：仅 DXF 只读——`summary` `layers` `blocks` `text` `stats` `tch`，以及 `export --to json|dxf`。DWG 与图片/PDF 导出**本项目未验证**：cadcraft 上游提供 Windows 与 macOS 构建（无 Linux CLI），但我们只在 Windows 上实测过。
-
----
-
-## 如何注册
-
-> 下文用 `<repo>` 指仓库根、`%USERPROFILE%` 指当前用户目录（cmd 里可直接用）；请按你的实际路径替换。
-
-### 一键注册（推荐）
-
-在**解压后的目录**里执行（轻量包和完整仓库都适用）：
+## 安装
 
 ```bat
-:: Windows
+:: Windows（在解压后的目录里）
 powershell -ExecutionPolicy Bypass -File Skill\install.ps1
 ```
 
@@ -81,201 +67,118 @@ powershell -ExecutionPolicy Bypass -File Skill\install.ps1
 bash Skill/install.sh
 ```
 
-它会：
+脚本做四件事（幂等，可反复跑）：
 
-- 把 `Skill/cadviewer` 以**目录联接 / 软链接**注册到 agent 的 skills 目录（不复制，文档一改立刻同步）
-- 自动识别本机**已存在**的 agent：OpenCode（`~/.config/opencode/skills`，总是装）、
-  Claude Code（`~/.claude/skills`）、Cursor（`~/.cursor/skills`）
-- 结束时打印 doctor 命令；**装完后不需要设置任何环境变量**
+1. 把 `Skill/NewbimAI-CADViewer-Skill` 以**目录联接/软链接**注册到 agent 的 skills 目录
+   （OpenCode `~/.config/opencode/skills` 总是装；检测到 Claude Code / Cursor 也一并装）；
+2. 缺 cadcraft 时下载并解压（删除上游 GUI 主程序，只留 CLI）；
+3. 缺界面/服务端时按 **`skill.json` 的版本**（源码树回退 `server/package.json`）取 `v<version>` 归档补全；
+   标签不可用时退回 `main`，并**明确打印警告**（可能与本包 CLI 版本错配）；
+4. 跑一次 `doctor`，打印 `versions`（skill/app）与 `degraded`。
 
-可选项：
+常用开关：`-Force` / `--force`（重指向）、`-SkillsDir` / `--skills-dir`、
+`-SkipComponents` / `--skip-components`（只留 CLI）、`-ComponentsUrl <zip>` / `COMPONENTS_URL=<zip>`（离线补组件）。
 
-- **幂等**：已注册且指向同一目录时直接成功（退出码 0），可反复运行。
-- 目标已存在但不是链接（旧副本）→ 默认跳过；加 `-Force`（bash 用 `--force`）会删掉它再建链接。
-- 已注册但指向别处 → 同样用 `-Force` 重新指向。
-- 只想装到指定目录：`-SkillsDir <目录>`（bash 用 `--skills-dir <目录>`）。
-- 不下载界面/服务端（只要 CLI）：`-SkipComponents`（bash 用 `--skip-components`）。
-- 从本地归档补组件（离线/内网）：`-ComponentsUrl <zip>`（bash 用 `COMPONENTS_URL=<zip>`）。
+装完**不需要**任何环境变量。手动方式：把 `Skill/NewbimAI-CADViewer-Skill` 整个目录复制或软链接到
+`<skills>/NewbimAI-CADViewer-Skill`（不要只复制 `SKILL.md`）。
 
-下面是手动方式，效果相同，按需取用。
-
-OpenCode 会从 `<skills>/cadviewer/SKILL.md` 读取 Skill。默认 skill 根目录是：
-
-```text
-%USERPROFILE%\.config\opencode\skills\
-```
-
-> **其他 agent**（Claude Code 的 `~/.claude/skills/`、Cursor 等各自的 skills 目录）同理：
-> 把 `Skill/cadviewer/` 软链接或复制到那个目录即可，目录名保持 `cadviewer`。
-
-目标结构必须是：
-
-```text
-%USERPROFILE%\.config\opencode\skills\cadviewer\SKILL.md
-%USERPROFILE%\.config\opencode\skills\cadviewer\scripts\cad.mjs
-%USERPROFILE%\.config\opencode\skills\cadviewer\references\...
-```
-
-把 **`Skill/cadviewer/` 整个目录**复制（或软链接）过去即可，不要只复制 `SKILL.md`。
-
-### 方式 A：复制（备选，简单）
-
-```bat
-robocopy "<repo>\Skill\cadviewer" ^
-         "%USERPROFILE%\.config\opencode\skills\cadviewer" ^
-         /MIR
-```
-
-> robocopy 成功时退出码是 0–7，不是 1，别把它当失败。
-> 以后更新仓库里的 Skill，重跑一次 `/MIR` 即可。
-
-### 方式 B：目录联接 / 软链接（改动实时同步）
-
-Windows 目录联接（junction，通常不需要管理员）：
-
-```bat
-mklink /J "%USERPROFILE%\.config\opencode\skills\cadviewer" ^
-          "<repo>\Skill\cadviewer"
-```
-
-Linux/macOS：
-
-```bash
-ln -s "/path/to/CADViewer/Skill/cadviewer" "$HOME/.config/opencode/skills/cadviewer"
-```
-
-### `CADVIEWER_ROOT`：现在**不再需要**（老版本才要）
-
-CLI 找项目根的顺序：
-
-1. `--root <目录>`
-2. 环境变量 `CADVIEWER_ROOT`
-3. **从脚本自身位置向上找** ← 这就是安装后免配置的原因：
-   轻量包布局是 `<包>/Skill/cadviewer/scripts/cad.mjs`，从脚本往上两级就能找到 `<包>/server/scanner.js`；
-   用 junction / 软链接注册时，Node 解析到的是**包内真实路径**，所以照样命中。
-4. 从当前工作目录向上找
-
-所以：**用 `install.ps1` / `install.sh` 装完就能直接跑，不需要设任何变量。**
-只有当你想把 CLI 复制到包外单独调用、或想让它指向**另一个**安装目录时，才需要 `--root` 或 `CADVIEWER_ROOT`：
-
-```bat
-set CADVIEWER_ROOT=<解压目录>
-```
-
-```bash
-export CADVIEWER_ROOT=/path/to/cadviewer
-# 想长期生效，写进 ~/.bashrc 或 ~/.zshrc
-```
-
-安装脚本最后**已经自动跑过 `doctor`** 并打印了结果（`doctor: ok`）。想单独再确认时才手动跑：
-
-```bash
-node "%USERPROFILE%\.config\opencode\skills\cadviewer\scripts\cad.mjs" doctor
-```
-
-应看到 `"ok": true`，且 `project-root` 指向真实仓库、`cadcraft` 指向 `bin/cadcraft/**/cadcraft-cli.exe`。
-**不要**为了验证去找一张图纸跑——安装只要 `doctor` 通过就算完成。
+`CADVIEWER_ROOT` 只在“把 Skill 复制到仓库外、且没有 `server/` 同级目录”时才需要：
+CLI 找根顺序是 `--root` → `CADVIEWER_ROOT` → 脚本自身位置 → 当前目录。
 
 ---
 
-## 快速上手
+## 命令速查
 
 ```bash
-# 环境自检
-node cad.mjs doctor
-
-# 【主流程】收到图纸：转 DXF + 起服务 + 返回可直接打开的链接与概要
-node cad.mjs open "<图纸目录>\示例图纸.dwg"
-# → {"ok":true,"url":"http://127.0.0.1:3717/?open=...","digest":{...},"next":[...]}
-#   把 url 也发给用户（本机链接，服务在跑时才能打开）；不要默认导出 PNG/PDF
-
-# 用完关掉（后台静默启动，空闲 30 分钟也会自动退出）
-node cad.mjs close
-
-# 一张图的全貌（实体/图层/图块/文字/天正/告警）
-node cad.mjs summary "<图纸目录>\示例图纸.dwg"
-
-# 图层（默认只列有实体的层；--all 全列）
-node cad.mjs layers "<图纸目录>\示例图纸.dwg"
-node cad.mjs layers "<图纸目录>\示例图纸.dwg" --all
-
-# 图块（refCount 降序；匿名块已并回原块）
-node cad.mjs blocks "<图纸目录>\示例图纸.dwg"
-node cad.mjs blocks "<图纸目录>\示例图纸.dwg" --min-ref 1 --limit 20
-
-# 找文字（不区分大小写子串，支持中文）
-node cad.mjs text "<图纸目录>\示例图纸.dwg" --find "TAG"
-
-# 天正判定
-node cad.mjs tch "<图纸目录>\天正图.dwg"
-
-# 完整原始统计
-node cad.mjs stats "<图纸目录>\示例图纸.dwg"
-
-# 导出
-node cad.mjs export "<图纸目录>\a.dwg" --to dxf  --out out.dxf
-node cad.mjs export "<图纸目录>\a.dwg" --to svg  --out out.svg
-node cad.mjs export "<图纸目录>\a.dwg" --to pdf  --out out.pdf
-node cad.mjs export "<图纸目录>\a.dwg" --to png  --out preview.png
-node cad.mjs export "<图纸目录>\a.dwg" --to json --out stats.json
+node cad.mjs doctor                          # 自检（versions / degraded）
+node cad.mjs open "图.dwg"                    # 转 DXF + 起服务 + 链接 + 概要
+node cad.mjs readout "图.dwg" > readout.json # 一次拿全量数据
+node cad.mjs compare "旧图.dwg" "新图.dwg"    # 图纸对比（JSON 差异摘要）
+node cad.mjs measure distance --points "0,0;3000,4000"
+node cad.mjs udo "天正图.dwg" --coverage      # 自定义对象：解出/未解出
+node cad.mjs export "图.dwg" --to pdf --out out.pdf
+node cad.mjs close                           # 用完关服务
 ```
 
-所有命令输出 **JSON 到 stdout**（2 空格缩进）。成功退出码 0；失败时 stderr 输出 `{"error":"..."}` 并退出 1。
-
-`--out` 省略时，产物写到：
-
-```text
-<项目根>/server/cache/skill/<sha1(源文件绝对路径) 前 12 位>/
-```
-
-并在 JSON 的 `out` 字段返回绝对路径。DWG 只转换一次，后续命中 `converted.dxf`。
+所有命令输出 **JSON 到 stdout**；失败时 stderr 是 `{"error":"..."}`，退出码 1。
+字段与参数详见 `NewbimAI-CADViewer-Skill/references/cli.md`。
 
 ---
 
-## 轻量分发包（85 KB，给别的 agent / 上传受限的平台上用）
+## 打包（两种包，共用一套逻辑）
 
 ```bash
-node scripts/build-skill.mjs      # → release/cadviewer-skill-<version>.zip
+node scripts/build-skill.mjs            # 轻量包
+node scripts/build-skill-full.mjs       # 完整包
+node scripts/check-skill.mjs --self-test                 # 校验源码树 + 命令层单测
+node scripts/check-skill.mjs --package <stage 目录>      # 校验打包产物（含闭源边界/许可附件）
 ```
 
-包里只有 `Skill/`（含 `cad.mjs`）＋ CLI 实际 `import` 的 4 个模块
-（`cadcraft.js` `scanner.js` `tch-detect.js` `svg-pdf.js`）＋ `server/package*.json`。
-解压 **217 KB**、压缩 **85 KB**——不含 `web/`、字体、前端产物、转换器。
+输出默认在 `release/`；用环境变量 `CADVIEWER_RELEASE_DIR=<临时目录>` 可完全不污染仓库。
+两个包都由 `scripts/skill-build-lib.mjs` 生成：版本注入、模块清单（读 `skill.json`）、
+闭源边界断言、许可附件校验、压缩与体积报告都是同一套。
 
-**装完就是完整功能**，因为 `install.ps1` / `install.sh` 会补两次下载：
+### 体积构成（0.3.0 实测，未压缩 / 压缩）
 
-| 步骤 | 内容 | 大小 | 补完之后 |
-|---|---|---|---|
-| cadcraft | DWG 转换器 | ~57MB | DWG 打开、`svg\|pdf\|png` 导出 |
-| components | `web/dist` + `server/*.js` | ~18MB | `open` 出链接、`serve` 起界面、图块文字展开 |
+**轻量包** `NewbimAI-CADViewer-Skill-0.3.0.zip`
 
-也就是说 `open` / `serve` / 四类导出**全部可用**，与直接 clone 仓库等价。
+| 组成 | 大小 |
+|---|---:|
+| `Skill/`（安装脚本 + README + SKILL.md + skill.json + scripts + references） | 171 KB |
+| `server/`（5 个模块 + package.json/lock） | 219 KB |
+| `使用说明.txt` | 2 KB |
+| **解压合计** | **约 392 KB** |
+| **zip** | **153 KB** |
 
-- 下载失败只告警，不阻塞：`summary` `stats` `layers` `blocks` `text` `tch`
-  与 `export --to json|dxf` 只要有 `server/*.js` 就能跑；`doctor` 会把缺失项列进 `degraded`
-- 离线 / 内网：把仓库源码 zip 下到本地，用
-  `powershell -File Skill\install.ps1 -ComponentsUrl <本地 zip>`（bash 用 `COMPONENTS_URL=<zip>`）
-- 只想要 CLI、不要界面：`-SkipComponents`（bash 用 `--skip-components`）
-- 版本取自包内 `server/package.json`，按 `v<version>` 标签取归档；取不到就退回 `main` 分支
-- 用法：`node <包>/Skill/cadviewer/scripts/cad.mjs --root <包> summary 图纸.dxf`
+**完整包** `NewbimAI-CADViewer-Skill-full-0.3.0.zip`
 
-> 为什么四个模块就够 CLI：它们只依赖 Node 内置库，彼此不 import；`block-text.js`
-> 只有 `dxf-web.js`（服务端渲染预处理）用，CLI 不需要——但界面导出需要，所以由
-> components 步骤补回。
+| 组成 | 大小 |
+|---|---:|
+| `Skill/`（安装脚本 + README + Skill） | 171 KB |
+| `server/`（全量） | 758 KB |
+| `web/dist`（其中字体 25.7 MB） | 28.9 MB |
+| `bin/cadcraft`（仅 CLI） | 50.9 MB |
+| `bin/udo-cli`（解析组件） | 7.4 MB |
+| `licenses/`（MPL-2.0 等附件） | 37 KB |
+| `LICENSE` + `THIRD-PARTY.md` | 45 KB |
+| **解压合计** | **约 88.1 MB** |
+| **zip** | **43.3 MB** |
+
+轻量包装完还要联网两次：cadcraft（~57MB）+ 组件（~18MB）；完整包离线可用，且自带自定义对象解析。
+
+### 版本
+
+Skill 与 App **同版本**，唯一事实源是 `server/package.json` 的 `version`：
+
+1. 源码树里的 `skill.json` **不写** `version`（`doctor` 回退读 `server/package.json`）；
+2. 构建时由 `scripts/build-skill.mjs` 把 `version` 注入包内 `skill.json`，并写上 `versionSource`；
+3. `doctor` 同时输出 `appVersion` 与 `skillVersion`；不一致时进 `degraded`（`skill-version`），提示重跑安装。
+
+`minAppVersion` 是**能力最低要求**（对比/测量/自定义对象从 0.3.0 起提供），不是第二份版本号。
+
+---
+
+## 闭源边界与许可
+
+- Skill 包内**不含**自定义对象解析组件的源码目录、Cargo 清单、`target/`、`*.rlib`；
+  构建脚本会遍历产物，命中即**构建失败**（`assertNoForbiddenSources`）。
+- 完整包含闭源二进制 `bin/udo-cli/udo-cli.exe`，因此**必须**随附：
+  `licenses/acadrust-MPL-2.0.txt`、`acadrust-SOURCE.txt`、`acadrust-NOTICE.txt`、
+  `udo-cli-NOTICE.md`、`udo-cli-LICENSE-MIT.txt`、`udo-cli-LICENSE-APACHE.txt`。
+  少一个文件，构建直接失败（合规优先）。
+- 本项目自身 AGPL-3.0-only（`LICENSE`）；第三方组件见 `THIRD-PARTY.md`。
+  商业许可联系 nbimgpt@163.com。
 
 ---
 
 ## 边界
 
 - 只读本地文件；除非用户明确要求，不要把图纸上传到任何外部服务。
-- **服务按需起、用完关**：只有 `open` / `serve` 会启动服务，而且是**后台静默启动**
-  （不弹控制台窗口、不打开系统浏览器）；`close` 立即关，空闲 30 分钟也会自动退出。
-  其余命令（`summary` `blocks` `export` …）完全不起服务。
-- **安装不交互**：`install.ps1` / `install.sh` 不读任何输入（无 `Read-Host`/`pause`），
-  可直接在 agent 的命令里调用。
-- 本 Skill **不修改** `server/**`、`web/**`、`start.bat`；`server/**` 只作为只读模块 import。
-- 不引入任何新的 npm 依赖（只用 Node 内置 + 仓库现有模块）。
-- `Skill/cadviewer/SKILL.md` 是给 agent 的指令，改 CLI 行为时要同步检查它。
-- 缓存与 `bin/cadcraft/` 都不进仓库；`server/cache/` 是纯派生缓存（**可随时整目录删**），用户上传的原图在 `data/`（同样不入库，不要提交）。
+- 服务按需起、用完关：`open` / `serve` / `compare` 会在后台静默启动（不弹窗、不开系统浏览器）；
+  `close` 立即关，空闲 30 分钟也会自动退出。其余命令完全不起服务。
+- 安装脚本不交互（无 `Read-Host` / `pause`），可直接在 agent 命令里调用。
+- Skill 不修改 `server/**`、`web/**`、`start.bat`；只作为只读模块 import。
+- 不引入新的 npm 依赖（Node 内置 + 仓库现有模块）。
+- `server/cache/` 是纯派生缓存（可随时删）；用户原图在 `data/`（**不要删、不要提交**）。
 
-更多：见 `cadviewer/references/answering.md`（口径与答法）和 `troubleshooting.md`（排障）。
+排障见 `NewbimAI-CADViewer-Skill/references/troubleshooting.md`。

@@ -1,0 +1,146 @@
+{
+  "name": "NewbimAI-CADViewer-Skill",
+  "displayName": "NewbimAI CADViewer Skill",
+  "description": "用命令行读取、统计、对比、测量并转换本地 CAD 图纸（DWG/DXF），含天正自定义对象解析能力。",
+  "entry": "scripts/cad.mjs",
+  "versionPolicy": {
+    "source": "server/package.json",
+    "field": "version",
+    "injectedBy": "scripts/build-skill.mjs",
+    "note": "Skill 与 App 同版本。版本号只在 server/package.json 一处维护；打包时由构建脚本把 version 注入本文件。源码树中的本文件不写 version，doctor 会回退读取 server/package.json。"
+  },
+  "minAppVersion": "0.3.0",
+  "platforms": {
+    "windows": "完整功能（DWG 转换、对比、测量、自定义对象解析、界面、全部导出）",
+    "macos": "DXF 只读命令 + JSON/DXF 导出；DWG 与图片/PDF 导出未实测",
+    "linux": "同 macOS"
+  },
+  "requires": {
+    "node": ">=20",
+    "serverModules": [
+      "cadcraft.js",
+      "scanner.js",
+      "udo-detect.js",
+      "svg-pdf.js",
+      "udo-convert.js"
+    ],
+    "binaries": [
+      {
+        "id": "cadcraft",
+        "path": "bin/cadcraft/**/cadcraft-cli.exe",
+        "required": false,
+        "neededFor": ["dwg", "export:svg", "export:pdf", "export:png"],
+        "license": "Apache-2.0 OR MIT（随包内 LICENSE-APACHE / LICENSE-MIT）"
+      },
+      {
+        "id": "udo-cli",
+        "path": "bin/udo-cli/udo-cli.exe",
+        "required": false,
+        "neededFor": ["udo:coverage"],
+        "license": "MIT OR Apache-2.0；含 MPL-2.0 第三方组件，许可附件在包内 licenses/ 目录"
+      }
+    ],
+    "serviceComponents": {
+      "neededFor": ["compare", "compare:report", "open", "serve"],
+      "files": ["server/index.js", "web/dist/index.html"],
+      "note": "轻量包安装时由 install.ps1 / install.sh 补回；完整包已内置。"
+    }
+  },
+  "capabilities": [
+    {
+      "id": "read",
+      "label": "读图与统计",
+      "commands": ["open", "readout", "summary", "stats", "layers", "blocks", "text", "export"],
+      "reference": "references/answering.md"
+    },
+    {
+      "id": "compare",
+      "label": "图纸对比",
+      "commands": ["compare"],
+      "reference": "references/compare.md",
+      "contract": "docs/compare-contract.md",
+      "requires": ["serviceComponents"]
+    },
+    {
+      "id": "measure",
+      "label": "测量",
+      "commands": ["measure"],
+      "reference": "references/measure.md",
+      "requires": []
+    },
+    {
+      "id": "custom-objects",
+      "label": "自定义对象解析（user-defined object）",
+      "commands": ["udo"],
+      "reference": "references/udo.md",
+      "requires": ["binaries:udo-cli"]
+    }
+  ],
+  "commands": {
+    "doctor": {
+      "usage": "doctor",
+      "summary": "环境自检；输出 appVersion / skillVersion、必需项与 degraded 列表",
+      "output": "json"
+    },
+    "open": {
+      "usage": "open <file> [--port N]",
+      "summary": "转 DXF → 起本机服务 → 返回可点击链接 + 概要",
+      "requires": ["serviceComponents"]
+    },
+    "serve": {
+      "usage": "serve [--status] [--foreground] [--port N]",
+      "summary": "确保本机服务在跑"
+    },
+    "close": {
+      "usage": "close [--port N]",
+      "summary": "关闭本机服务"
+    },
+    "readout": {
+      "usage": "readout <file> [--limit N]",
+      "summary": "一次拿到全量可读 JSON：实体/图层/块/文字/范围/自定义对象判定"
+    },
+    "summary": { "usage": "summary <file>", "summary": "单图概要" },
+    "stats": { "usage": "stats <file>", "summary": "扫描器完整原始输出" },
+    "layers": { "usage": "layers <file> [--all]", "summary": "图层清单与实体数" },
+    "blocks": {
+      "usage": "blocks <file> [--min-ref N] [--limit N] [--all]",
+      "summary": "图块引用统计（匿名块已并回原块）"
+    },
+    "text": {
+      "usage": "text <file> [--find <子串>] [--layer <层>] [--limit N]",
+      "summary": "顶层文字检索"
+    },
+    "udo": {
+      "usage": "udo <file> [--coverage]",
+      "summary": "自定义对象判定；--coverage 给出解出/未解数量与原因",
+      "requires": ["binaries:udo-cli"]
+    },
+    "compare": {
+      "usage": "compare <base> <target> [--tolerance N] [--quantize N] [--props a,b] [--include-hatch] [--max-changes N] [--limit N] [--port N]",
+      "summary": "图纸对比：新增/删除/修改 + 变更集 + 告警（JSON）；.docx 报告在界面生成",
+      "requires": ["serviceComponents"],
+      "contract": "docs/compare-contract.md"
+    },
+    "measure": {
+      "usage": "measure <distance|length|area|angle> --points \"x,y;x,y[;x,y]\"",
+      "summary": "坐标测量：两点距离、折线长度、闭合面积、三点夹角",
+      "requires": []
+    },
+    "export": {
+      "usage": "export <file> --to dxf|svg|pdf|json|png [--out <path>]",
+      "summary": "导出原始 DXF / 矢量 SVG/PDF / 统计 JSON / 预览 PNG"
+    }
+  },
+  "boundaries": {
+    "excludedFromPackage": ["闭源解析组件源码目录", "任何 Rust 构建清单", "任何 Rust 编译产物"],
+    "closedSourceBinaries": ["bin/udo-cli/udo-cli.exe"],
+    "licenseAttachments": [
+      "licenses/acadrust-MPL-2.0.txt",
+      "licenses/acadrust-SOURCE.txt",
+      "licenses/udo-cli-NOTICE.md",
+      "licenses/udo-cli-LICENSE-MIT.txt",
+      "licenses/udo-cli-LICENSE-APACHE.txt"
+    ],
+    "note": "随包分发闭源二进制时，上述许可附件必须同时在包内；构建脚本会校验缺失即失败。"
+  }
+}

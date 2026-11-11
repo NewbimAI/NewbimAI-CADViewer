@@ -66,6 +66,12 @@ for (const d of ["server", "web", "bin", "node", "data"]) fs.mkdirSync(path.join
 // ---------------------------------------------------------------- 3. 拷源码
 step("3/6 拷服务端 / 前端产物 / cadcraft");
 const copy = (from, to) => fs.cpSync(from, to, { recursive: true });
+// 上游便携包里的 cadcraft.exe 是 EGUI 桌面主程序（约 75MB），本项目的 CLI 链路只调用
+// cadcraft-cli.exe，从不启动它。打包时排除，安装体积从 ~128MB 降到 ~53MB。
+const copyCadcraft = (from, to) => fs.cpSync(from, to, {
+  recursive: true,
+  filter: (src) => !/^cadcraft\.exe$/i.test(src.split(path.sep).pop()),
+});
 for (const f of fs.readdirSync(path.join(ROOT, "server"))) {
   if (!f.endsWith(".js") && !f.endsWith(".bat") && !f.endsWith(".json")) continue;
   if (f === "package-lock.json") continue; // 用 OUT 里重新解析的那份
@@ -73,7 +79,7 @@ for (const f of fs.readdirSync(path.join(ROOT, "server"))) {
 }
 fs.copyFileSync(path.join(ROOT, "server/package-lock.json"), path.join(OUT, "server/package-lock.json"));
 copy(path.join(ROOT, "web/dist"), path.join(OUT, "web/dist"));
-copy(path.join(ROOT, "bin/cadcraft"), path.join(OUT, "bin/cadcraft"));
+copyCadcraft(path.join(ROOT, "bin/cadcraft"), path.join(OUT, "bin/cadcraft"));
 for (const f of ["LICENSE", "THIRD-PARTY.md", "README.md", "CLA.md"]) {
   if (fs.existsSync(path.join(ROOT, f))) fs.copyFileSync(path.join(ROOT, f), path.join(OUT, f));
 }
@@ -173,6 +179,59 @@ try {
 }
 const zipped = fs.statSync(ZIP).size;
 
+// ---------------------------------------------------------------- 7. 增量更新包 + 清单
+step("7. 生成增量更新包 + 清单（update.json）");
+const UPDATE_ZIP = path.join(ROOT, "release", `CADViewer-${VERSION}-win64-update.zip`);
+const UPDATE_CACHE = path.join(CACHE, `update-${VERSION}`);
+const UPDATE_EXCLUDE = new Set(["node", "bin", "data", "release"]);
+
+fs.rmSync(UPDATE_CACHE, { recursive: true, force: true });
+fs.rmSync(UPDATE_ZIP, { force: true });
+fs.mkdirSync(UPDATE_CACHE, { recursive: true });
+
+// 只打包应用文件：node/bin/data 由完整包提供，更新时不能覆盖。
+// 过滤后的副本直接作为 zip 根，更新包解压后即为“包根”（server/、web/dist/、start.bat 在顶层）。
+fs.cpSync(OUT, UPDATE_CACHE, {
+  recursive: true,
+  filter: (src) => {
+    const rel = path.relative(OUT, src);
+    if (!rel) return true;
+    return !UPDATE_EXCLUDE.has(rel.split(path.sep)[0]);
+  },
+});
+
+try {
+  execFileSync("tar.exe", ["-a", "-c", "-f", UPDATE_ZIP, "-C", UPDATE_CACHE, "."], { stdio: "inherit" });
+} catch {
+  execFileSync("powershell", ["-NoProfile", "-Command",
+    `Compress-Archive -Path '${UPDATE_CACHE}\\*' -DestinationPath '${UPDATE_ZIP}' -CompressionLevel Optimal`], { stdio: "inherit" });
+}
+
+const sha256File = (file) =>
+  new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    fs.createReadStream(file)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("error", reject)
+      .on("end", () => resolve(hash.digest("hex")));
+  });
+
+const updateZipped = fs.statSync(UPDATE_ZIP).size;
+const [major, minor] = VERSION.split("-")[0].split(".");
+const manifest = {
+  version: VERSION,
+  releasedAt: new Date().toISOString(),
+  channel: "stable",
+  minVersion: `${major}.${minor}.0`,
+  notes: "",
+  assets: {
+    full: { file: path.basename(ZIP), size: zipped, sha256: await sha256File(ZIP) },
+    update: { file: path.basename(UPDATE_ZIP), size: updateZipped, sha256: await sha256File(UPDATE_ZIP) },
+  },
+};
+const MANIFEST = path.join(ROOT, "release", "update.json");
+fs.writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
 console.log(`\n=== 完成 ===`);
 console.log(`  目录: ${OUT}`);
 console.log(`  大小: ${mb(before)}`);
@@ -181,3 +240,6 @@ console.log(`  大小: ${mb(zipped)}`);
 console.log(`\n  cadcraft : ${mb(dirSize(path.join(OUT, "bin/cadcraft")))}`);
 console.log(`  web/dist : ${mb(dirSize(path.join(OUT, "web/dist")))}`);
 console.log(`  server   : ${mb(dirSize(path.join(OUT, "server")))}`);
+console.log(`\n  完整包: ${mb(zipped)}  ${ZIP}`);
+console.log(`  更新包: ${mb(updateZipped)}  ${UPDATE_ZIP}`);
+console.log(`  清单  : ${MANIFEST}`);
